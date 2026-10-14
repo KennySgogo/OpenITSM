@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: openitsm-backend
+  datasource:
+    url: ${OPENITSM_DB_URL:jdbc:postgresql://127.0.0.1:5432/openitsm}
+    username: ${OPENITSM_DB_USER:admin}
+    password: ${OPENITSM_DB_PASSWORD:1234}
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  flyway:
+    clean-disabled: true
+server:
+  address: 127.0.0.1
+  port: 8080
+  forward-headers-strategy: none
+  error:
+    include-message: never
+    include-stacktrace: never
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+openitsm:
+  origin: ${OPENITSM_ORIGIN:https://localhost}
+  cookie-secure: true
+  cookie-name: __Host-openitsm-session
+  account-mail-key-file: ${OPENITSM_ACCOUNT_MAIL_KEY_FILE:}
+  bootstrap-name: ${OPENITSM_BOOTSTRAP_NAME:}
+  bootstrap-email: ${OPENITSM_BOOTSTRAP_EMAIL:}
+mybatis-plus:
+  type-handlers-package: com.openitsm.config
+  configuration:
+    map-underscore-to-camel-case: true

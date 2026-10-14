@@ -1,0 +1,9 @@
+openitsm:
+  origin: http://localhost:5173
+  cookie-secure: false
+  cookie-name: openitsm-local-session
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
