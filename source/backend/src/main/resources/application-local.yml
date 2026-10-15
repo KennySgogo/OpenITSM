@@ -1,0 +1,15 @@
+spring:
+  config:
+    # Support IDEA started at the repository root and Maven started in source/backend.
+    import:
+      - optional:file:../../.env[.properties]
+      - optional:file:./.env[.properties]
+openitsm:
+  origin: http://localhost:5173
+  cookie-secure: false
+  cookie-name: openitsm-local-session
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

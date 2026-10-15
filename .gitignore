@@ -1,0 +1,14 @@
+.env
+.vscode/
+.idea/
+replacements.txt
+all-MiniLM-L6-v2/
+.msi
+output/
+CLAUDE.local.md
+.langgraph_api/
+.antigravity_cli/
+.agents
+.claude
+.commandcode
+docs

@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: openitsm-backend
+  datasource:
+    url: ${OPENITSM_DB_URL:jdbc:postgresql://127.0.0.1:5432/openitsm}
+    username: ${OPENITSM_DB_USER:admin}
+    password: ${OPENITSM_DB_PASSWORD:1234}
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  flyway:
+    clean-disabled: true
+  mail:
+    host: ${OPENITSM_SMTP_HOST:}
+    port: ${OPENITSM_SMTP_PORT:465}
+    username: ${OPENITSM_SMTP_USERNAME:}
+    password: ${OPENITSM_SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.ssl.enable: ${OPENITSM_SMTP_SSL_ENABLED:true}
+      mail.smtp.starttls.enable: ${OPENITSM_SMTP_STARTTLS_ENABLED:false}
+      mail.smtp.starttls.required: ${OPENITSM_SMTP_STARTTLS_ENABLED:false}
+server:
+  address: 127.0.0.1
+  port: 8080
+  forward-headers-strategy: none
+  error:
+    include-message: never
+    include-stacktrace: never
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+openitsm:
+  account-mail:
+    enabled: ${OPENITSM_ACCOUNT_MAIL_ENABLED:false}
+    from: ${OPENITSM_MAIL_FROM:}
+    public-base-url: ${OPENITSM_PUBLIC_BASE_URL:}
+  origin: ${OPENITSM_ORIGIN:https://localhost}
+  cookie-secure: true
+  cookie-name: __Host-openitsm-session
+  account-mail-key-file: ${OPENITSM_ACCOUNT_MAIL_KEY_FILE:}
+  bootstrap-name: ${OPENITSM_BOOTSTRAP_NAME:}
+  bootstrap-email: ${OPENITSM_BOOTSTRAP_EMAIL:}
+mybatis-plus:
+  type-handlers-package: com.openitsm.config
+  configuration:
+    map-underscore-to-camel-case: true

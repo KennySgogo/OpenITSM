@@ -1,0 +1,45 @@
+import { createRouter, createWebHistory } from 'vue-router';
+import AuthPage from '../views/AuthPage.vue';
+import ApplicationLayout from '../components/ApplicationLayout.vue';
+import MembersPage from '../views/MembersPage.vue';
+import PlaceholderPage from '../views/PlaceholderPage.vue';
+import { sessionState, sessionNotice, restoreSession, clearSession } from '../stores/SessionStore';
+import { setExpiredHandler, ApiError } from '../api/HttpClient';
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    ...['login', 'activate', 'forgot-password', 'reset-password'].map(path => ({ path: `/${path}`, component: AuthPage, meta: { public: true } })),
+    {
+      path: '/', component: ApplicationLayout, children: [
+        { path: '', component: PlaceholderPage, meta: { title: '工作台' } },
+        { path: 'admin/users', component: MembersPage, meta: { title: '成员管理' } },
+        { path: 'tickets', component: PlaceholderPage, meta: { title: '工单' } },
+        { path: 'tickets/:id', component: PlaceholderPage, meta: { title: '工单详情' } },
+        { path: 'dashboard', component: PlaceholderPage, meta: { title: '服务看板' } },
+        { path: 'knowledge', component: PlaceholderPage, meta: { title: '知识库' } },
+        { path: 'settings', component: PlaceholderPage, meta: { title: '团队配置' } },
+        { path: ':pathMatch(.*)*', component: PlaceholderPage, meta: { title: '页面未找到', missing: true } }
+      ]
+    }
+  ],
+  scrollBehavior: () => ({ top: 0 })
+});
+setExpiredHandler(failure => {
+  clearSession();
+  sessionNotice.value = failure;
+  const route = router.currentRoute.value;
+  if (!route.meta.public && route.path !== '/login') void router.replace({ path: '/login', query: { returnTo: route.fullPath } });
+});
+router.beforeEach(async to => {
+  if (to.meta.public) return true;
+  if (!sessionState.restored) {
+    try { await restoreSession(); }
+    catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 401) return true;
+    }
+  }
+  if (sessionState.restored && !sessionState.session) return { path: '/login', query: { returnTo: to.fullPath } };
+  if (to.path === '/' && sessionState.session) return sessionState.session.defaultPath;
+  return true;
+});
