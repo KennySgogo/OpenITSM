@@ -57,3 +57,40 @@ test('refresh after memory loss obtains CSRF before writing', async () => {
   await request('/auth/logout', { method: 'POST' });
   assert.deepEqual(paths, ['/api/v1/auth/csrf', '/api/v1/auth/logout']);
 });
+
+test('multipart CSRF retry preserves file bytes, visibility, version and key and leaves boundary to browser', async () => {
+  setCsrfToken('old-token');
+  const body = new FormData();
+  body.append('file', new Blob([new Uint8Array([0, 255, 2])]), '日志.bin');
+  body.append('visibility', 'INTERNAL');
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/auth/csrf')) return ok({ csrfToken: 'new-token' });
+    calls.push(init!);
+    return calls.length === 1 ? fail(403, 'CSRF_INVALID') : ok({ replayed: true });
+  };
+  assert.deepEqual(await request('/tickets/id/attachments', { method: 'POST', body, key: 'same-key', version: 7 }), { replayed: true });
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.body, body);
+    assert.equal((call.headers as Record<string, string>)['Content-Type'], undefined);
+    assert.equal((call.headers as Record<string, string>)['Idempotency-Key'], 'same-key');
+    assert.equal((call.headers as Record<string, string>)['If-Match'], '"7"');
+    assert.equal(call.credentials, 'include');
+  }
+  assert.equal(body.get('visibility'), 'INTERNAL');
+  assert.deepEqual(new Uint8Array(await (body.get('file') as Blob).arrayBuffer()), new Uint8Array([0, 255, 2]));
+});
+
+test('binary download returns bytes while authorization failures still use shared error and expiry handling', async () => {
+  globalThis.fetch = async () => new Response(new Uint8Array([0, 255, 1]), { headers: { 'Content-Type': 'application/octet-stream' } });
+  const blob = await request<Blob>('/attachments/id', { binary: true });
+  assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), new Uint8Array([0, 255, 1]));
+  globalThis.fetch = async () => fail(404, 'RESOURCE_NOT_FOUND');
+  await assert.rejects(request('/attachments/id', { binary: true }), (error: ApiError) => error.status === 404 && error.code === 'RESOURCE_NOT_FOUND');
+  let expired = false;
+  setExpiredHandler(() => { expired = true; });
+  globalThis.fetch = async () => fail(401, 'SESSION_EXPIRED');
+  await assert.rejects(request('/attachments/id', { binary: true }));
+  assert.equal(expired, true);
+});

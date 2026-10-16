@@ -113,7 +113,7 @@ public class AuthServiceImpl implements AuthService {
 
     private boolean allowedPath(UserEntity user, String value) {
         if (value == null || value.length() > 2048) return false;
-        if (value.equals("/knowledge") || value.equals("/tickets") || value.equals("/tickets?view=MINE")) return true;
+        if (value.equals("/knowledge") || value.equals("/tickets") || value.equals("/tickets/new") || value.equals("/tickets?view=MINE")) return true;
         if (value.matches("/tickets/[0-9a-fA-F-]{36}")) {
             try { return user.role.equals("EMPLOYEE")
                 ? tickets.existsForRequester(UUID.fromString(value.substring("/tickets/".length())), user.id)

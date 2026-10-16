@@ -4,8 +4,8 @@
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
 - 接口前缀：`/api/v1`（健康检查除外）
-- 当前已实现：认证、成员管理、健康检查（M01 后端）
-- M02 及之后模块：未实现（本文档含接口设计稿）
+- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/操作记录（M04 前后端）、列表详情与检索（M05 前后端，暂不含 SLA）
+- M04 已完成回复、内部备注、附件及操作记录；M06 及之后模块尚未完整实现（本文档含接口设计稿）
 
 ## 通用约定
 
@@ -58,8 +58,8 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | Content-Type: application/json | 有请求正文的接口 | 正文必须是合法 JSON |
 | Origin | 所有写请求 | 见 CSRF 一节 |
 | X-CSRF-Token | 所有写请求 | 见 CSRF 一节 |
-| If-Match | 成员管理写操作 | `"<version>"`，如 `"3"`；见乐观版本与幂等键 |
-| Idempotency-Key | 成员管理写操作 | UUID；见乐观版本与幂等键 |
+| If-Match | 成员管理、M03 及 M04 回复/备注/附件写操作 | `"<version>"`，如 `"3"`；见乐观版本与幂等键 |
+| Idempotency-Key | 成员管理、M02 创建、M03 及 M04 回复/备注/附件写操作 | UUID；见乐观版本与幂等键 |
 | X-Request-ID | 可选 | UUID；非法值被忽略 |
 
 ### 请求正文
@@ -73,7 +73,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 ### 成功响应
 
-统一结构（健康检查与 204 除外）：
+统一结构（健康检查、附件二进制下载与 204 除外）：
 
 ```json
 {
@@ -131,7 +131,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | 项 | 约定 |
 | --- | --- |
 | If-Match 格式 | 引号包裹的十进制数字，如 `"3"` |
-| 版本来源 | 成员列表的 `version` 字段 |
+| 版本来源 | 成员列表的 `version` 字段；M03 使用 M05 列表/详情返回的工单 `version` |
 | 缺失 If-Match | 428 PRECONDITION_REQUIRED |
 | 版本不匹配 | 409 VERSION_CONFLICT；重新拉取列表，由用户确认后重新提交 |
 | Idempotency-Key | 每次新操作生成新 UUID；网络失败重试时复用同一 UUID 和同一正文 |
@@ -176,7 +176,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 ## 接口
 
-所有模块统一采用“接口表 + 参数要点”格式。所有接口沿用通用约定（认证、CSRF、统一响应结构、全局错误码）；工单与知识的写操作沿用 If-Match / Idempotency-Key 约定。
+所有模块统一采用“接口表 + 参数要点”格式。所有接口沿用通用约定（认证、CSRF、统一响应结构、全局错误码）；工单与知识的写操作沿用 If-Match / Idempotency-Key 约定。M02 创建新工单仅需 Idempotency-Key，不要求 If-Match。
 
 ### M01 认证（已实现）
 
@@ -197,8 +197,8 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 - csrf：返回 64 字符 `csrfToken`；匿名会话 2 小时有效，过期后再调用换发新 Cookie 和新 token；已登录时返回当前登录会话的 token，Cookie 不变。
 - login：正文 email（去空格转小写，≤254 字符）、password（非空，≤64 码点）、可选 returnTo（站内路径，≤2048 字符）；成功换发会话与新 csrfToken，返回 user（含 id、name、email、role、status、version、lockedUntil）、defaultPath、redirectPath、absoluteExpiresAt、message。邮箱或密码错误、账号锁定（连续错 5 次锁 15 分钟）或已停用统一返回 401 AUTH_INVALID，前端不区分原因。
-- defaultPath 按角色：ADMIN→/dashboard、ENGINEER→/tickets?view=ASSIGNED、EMPLOYEE→/tickets?view=MINE（对应页面属 M02+ 前端，尚未实现）。
-- returnTo 校验（不通过则回退 defaultPath 并提示）：/knowledge、/tickets、/tickets?view=MINE 全角色；/tickets?view=ASSIGNED、UNASSIGNED、ALL 非员工；/tickets/{id} 员工限本人工单，其他角色须工单存在；/dashboard、/admin/users、/settings 管理员。
+- defaultPath 按角色：ADMIN→/dashboard、ENGINEER→/tickets?view=ASSIGNED、EMPLOYEE→/tickets?view=MINE；工单列表已实现，看板仍为占位页。
+- returnTo 校验（不通过则回退 defaultPath 并提示）：/knowledge、/tickets、/tickets/new、/tickets?view=MINE 全角色；/tickets?view=ASSIGNED、UNASSIGNED、ALL 非员工；/tickets/{id} 员工限本人工单，其他角色须工单存在；/dashboard、/admin/users、/settings 管理员。
 - me：Body 与 login 成功响应相同（redirectPath 恒等于 defaultPath）；响应头 ETag 与 user.version 一致，用于比对用户信息是否变化；401 时跳登录页并携带 returnTo。
 - activity：无正文，204；每 55～60 秒上报一次；同会话 60 秒内重复返回 429，忽略即可；只刷新无操作计时，不延长 absoluteExpiresAt；收到 401 停止上报并跳登录页。
 - logout：无正文，204；成功后清空本地状态并跳登录页；同一账号其他设备的会话不受影响。
@@ -223,10 +223,10 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 参数要点：
 
 - 查询：Query page（默认 1，须 ≥1）、q（去空格后 1～100 字符，同时模糊匹配姓名与邮箱，不区分大小写）、role、status；pageSize 固定 20，按更新时间倒序；page 或 status 非法返回 400 INVALID_QUERY。列表项含 version（写操作作 If-Match）与 lockedUntil（仅晚于当前时间时展示解锁入口；2026-10-15 新增，登录与 me 的 user 亦含此字段，不暴露失败次数）。
-- assignees：返回在职工程师的 id、name、unresolvedCount、pendingConfirmationCount 与统计时点 asOf，按姓名排序；工单业务表尚未创建，两个计数当前恒为 0；员工角色不展示分派入口。
+- assignees：返回在职工程师的 id、name、unresolvedCount、pendingConfirmationCount 与统计时点 asOf，按姓名排序；两个计数查询正式工单表；员工角色不展示分派入口。
 - 写操作（邀请、修改、停用、解锁、重发）均需 If-Match 与 Idempotency-Key；成功返回 resourceId（目标成员 ID）、acceptedVersion（受理后版本）、replayed（true 表示幂等重放）。
 - 邀请：正文 name（去空格后 1～80 字符）、email、role；成功 201，响应头 Location 为 `/api/v1/users?resourceId=<新成员ID>`；邮箱已存在返回 409 EMAIL_EXISTS；新成员状态为 INVITED，须完成激活才能登录。
-- 修改：正文 name、role 至少提供一个，否则 400；修改角色后该成员全部会话立即失效；最后一名在职管理员不能改角色（409 LAST_ADMIN）；工程师降为员工且有未关闭工单返回 409 MEMBER_HAS_OPEN_TICKETS（当前无工单数据，不会触发）。
+- 修改：正文 name、role 至少提供一个，否则 400；修改角色后该成员全部会话立即失效；最后一名在职管理员不能改角色（409 LAST_ADMIN）；工程师降为员工且有未关闭工单返回 409 MEMBER_HAS_OPEN_TICKETS。
 - 停用：正文 reason 必填（去空格后 5～500 字符，用于审计）；已停用返回 409 INVALID_STATE；最后一名在职管理员不能停用（409 LAST_ADMIN）；停用后该成员会话立即失效，邀请与重置链接全部作废。
 - 解锁：无正文；锁定最长 15 分钟自动解除，本接口用于提前解锁；对未锁定的成员调用也返回成功（重置失败计数）。
 - 重发邀请：无正文，成功 202；仅对 INVITED 成员可用，否则 409 INVALID_STATE；重发后旧邀请链接立即失效。
@@ -245,7 +245,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - ready 在依赖不可用时返回 503，Body 为 `{"status": "DOWN"}`，不是统一错误结构。
 - 仅允许服务器本机访问，浏览器调用返回通用 403 FORBIDDEN。
 
-### M02 内部提单（未实现）
+### M02 内部提单（后端已实现）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -253,33 +253,44 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 参数要点：
 
-- 正文含标题、描述、业务类型、影响范围。
-- 必须携带 Idempotency-Key，重复提交不重复建单。
-- 成功返回新建工单的编号与 ID。
+- 正文：`title`（标题）、`description`（描述）、`businessType`（业务类型）、`impactScope`（影响范围），均为必填字符串，去首尾空白后非空。业务类型和影响范围使用自由文本，不设枚举或额外字段长度上限，沿用 256 KiB 正文总大小限制。
+- 已登录的员工、工程师、管理员均可创建。提单人取当前用户，初始状态为 NEW，无负责人；不接受客户端指定提单人、状态或负责人。
+- 必须携带 UUID 格式的 Idempotency-Key，不要求 If-Match。作用域沿用现有实现：当前用户 + `POST /api/v1/tickets` + 幂等键；请求摘要沿用 DTO 序列化结果及空版本值，不因字段排列顺序改变而冲突，原始字段值不同（包括首尾空白不同）则不同，不新增记录有效期或清理规则。
+- 成功返回 HTTP 201，统一 `data` 包含 `id`（UUID）、`number`（工单编号）、`replayed`（首次 false）。编号由 PostgreSQL 序列生成 `ITSM-数字`，唯一但不保证连续。
+- 同键同正文返回首次工单的 ID/编号，仍为 HTTP 201，`data.replayed=true` 且响应头 `Idempotent-Replayed: true`；不同正文返回 409 IDEMPOTENCY_CONFLICT。同键正在处理返回 409 REQUEST_IN_PROGRESS，按通用约定重试。
+- 字段缺失、空白或非字符串、未知字段、幂等键缺失或非法返回 400 VALIDATION_FAILED，未登录或会话失效返回 401 SESSION_EXPIRED，CSRF 错误返回 403 CSRF_INVALID；其余沿用通用错误响应。
 
-### M03 工单处理（未实现）
+### M03 工单处理（前后端已实现）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
-| POST | /api/v1/tickets/{id}/claim | 认领无主单，新建变为处理中 | 工程师 |
+| POST | /api/v1/tickets/{id}/claim | 认领 NEW 无主单，或受理分派给本人的 NEW 单，变为处理中 | 工程师 |
 | POST | /api/v1/tickets/{id}/assignments | 分派工程师，状态不变 | 管理员 |
 | POST | /api/v1/tickets/{id}/transfers | 转派给其他有效工程师 | 工程师（本人负责单）、管理员 |
 | POST | /api/v1/tickets/{id}/suspensions | 挂起，处理中变为已挂起 | 工程师（本人负责单） |
 | POST | /api/v1/tickets/{id}/resume | 恢复，已挂起变为处理中 | 工程师（本人负责单） |
 | POST | /api/v1/tickets/{id}/resolutions | 解决，处理中变为已解决 | 工程师（本人负责单） |
 | POST | /api/v1/tickets/{id}/close | 关闭，已解决变为已关闭 | 提单人；工程师、管理员代确认 |
-| POST | /api/v1/tickets/{id}/reopen | 重开为处理中 | 提单人；工程师、管理员 |
+| POST | /api/v1/tickets/{id}/reopen | 重开为处理中 | 提单人、负责工程师、管理员 |
 | POST | /api/v1/tickets/{id}/priority-changes | 调整优先级 | 管理员 |
 
 参数要点：
 
-- assignments、transfers 正文含 assigneeId，目标须为有效工程师。
-- suspensions 正文含原因（必填）。
-- resolutions 正文含解决摘要（必填，对提单人公开）。
-- close 与 reopen：代确认或重开须填原因；重开限已解决或关闭后 7 日内。
-- priority-changes 正文含 priority（P1～P4）与原因（必填）。
+- 本节细则已由用户在 M03 开发前确认。九个接口均需 If-Match（当前工单 version、带引号数字）及 UUID Idempotency-Key；缺版本头 428 PRECONDITION_REQUIRED，格式错误 400 VALIDATION_FAILED，版本不匹配 409 VERSION_CONFLICT。工单版本通过 M05 列表/详情读取。
+- 成功 HTTP 200，`data` 为 `resourceId`（工单 UUID）、`acceptedVersion`（受理后版本）、`replayed`；ETag 为受理版本。同键同正文及原版本重放仍返回首次结果，带 `Idempotent-Replayed: true`；同键异正文/异版本返回 409 IDEMPOTENCY_CONFLICT。同键进行中为 409 REQUEST_IN_PROGRESS。沿用当前用户 + HTTP 方法及完整路径 + key 作用域、DTO/空正文及版本头摘要，不改变有效期与存储规则。
+- claim、resume 不接受正文。claim 仅限 NEW 且无负责人或已分派给当前工程师；认领/受理将负责人设为当前工程师。并发认领仅一个成功，其余用旧版本返回 409 VERSION_CONFLICT。
+- assignments、transfers 正文为 `assigneeId`（UUID，必填），仅允许 NEW、IN_PROGRESS、ON_HOLD；目标须为 ACTIVE ENGINEER，转派须选择不同于当前负责人的工程师。分派/转派不改变状态或轮次起点。分派只限管理员；转派只限管理员或负责工程师。
+- suspensions 正文为 `reason`，仅负责工程师可将 IN_PROGRESS 改为 ON_HOLD；resume 仅负责工程师可将 ON_HOLD 改为 IN_PROGRESS，均不改变轮次起点。
+- resolutions 正文为 `summary`（公开解决摘要），仅负责工程师可将 IN_PROGRESS 改为 RESOLVED。摘要由 M05 的 resolutionSummary 返回，按工单可见性读取；不提供 M04 回复或操作记录查询接口。
+- close 仅限 RESOLVED。提单人可无正文，也可提供 `reason`；工程师或管理员代确认必须提供 `reason`。成功改为 CLOSED 并记录关闭时间。
+- reopen 正文为 `reason`，仅限提单人、负责工程师或管理员；RESOLVED 可重开，CLOSED 自关闭起 7×24 小时内（含等于 7 天）可重开，超出返回 409 INVALID_STATE。改为 IN_PROGRESS，保留优先级/最近解决摘要，清空关闭时间并更新当前轮次起点。原负责人仍为 ACTIVE ENGINEER 时保留；已停用或不再是工程师时清空负责人，由管理员后续分派（此边界已由用户补充确认）。
+- priority-changes 正文为 `priority`（P1～P4）与 `reason`，仅管理员可操作；不改变状态或轮次起点。新旧工单初始优先级 P3。此阶段仅保存轮次起点，不实现 M07 时限、超时和达标计算。
+- `reason`、`summary` 均须为字符串，提供时去首尾空白后非空，无额外字段长度限制，沿用 256 KiB 总大小；未知字段及非法参数为 400 VALIDATION_FAILED。错误沿用统一结构。
+- 无权限为 403 FORBIDDEN；资源不存在或对员工不可见为 404 RESOURCE_NOT_FOUND；状态不允许、超过重开期限为 409 INVALID_STATE；目标非有效工程师或转派给当前负责人为 400 VALIDATION_FAILED。失败不更新工单、审计或成功幂等记录。
+- 流转、原因审计和成功幂等记录在同一事务提交；沿用 M01 成员控制锁，再锁成员行、工单行，使分派/认领与成员停用/降级串行，避免产生无效负责人。
+- 前端在详情页按角色、负责人及状态提供上述九个动作；分派/转派复用 GET /users/assignees。提交保留原始正文、版本和幂等键，结果不确定时锁定表单并重试原请求；版本/状态冲突展示后端错误并刷新详情，由用户重新确认，不自动以新版本提交。
 
-### M04 回复与附件（未实现）
+### M04 回复与附件（前后端已实现）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -287,16 +298,31 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | GET | /api/v1/tickets/{id}/replies | 查看公开回复（按角色过滤内部备注） | 同工单详情可见范围 |
 | POST | /api/v1/tickets/{id}/internal-notes | 添加仅工程师、管理员可见的内部备注 | 工程师、管理员 |
 | POST | /api/v1/tickets/{id}/attachments | 上传附件 | 提单人、工程师、管理员 |
+| GET | /api/v1/tickets/{id}/attachments | 分页读取可见附件 | 同工单详情可见范围 |
 | GET | /api/v1/attachments/{attachmentId} | 鉴权下载附件 | 工单可见者；内部附件仅工程师、管理员 |
 | GET | /api/v1/tickets/{id}/operations | 查看工单操作记录 | 同工单详情可见范围 |
 
 参数要点：
 
-- replies、internal-notes 正文含回复内容。
-- 附件上传使用 multipart/form-data，是通用 JSON 约定的例外；上传时选择可见性（公开或内部）。
-- 已关闭工单不能再追加回复与附件，引导用户新建单。
+- 本阶段细则已由用户确认。两个 POST 正文均为 `{"content":"回复内容"}`，content 必须为字符串，去首尾空白后非空，无额外字段长度限制；沿用 256 KiB JSON 总大小及未知字段拒绝规则。
+- 写请求必须携带 If-Match 和 UUID Idempotency-Key。成功 HTTP 200，data 为 `resourceId`（工单 ID）、`acceptedVersion`（工单新版本）、`replayed`，ETag 为受理版本；回复或备注每次成功均递增工单 version，不改变状态、负责人或轮次起点。
+- 沿用当前用户 + HTTP 方法及完整路径 + key 作用域、原始 DTO 及版本头摘要。同键同正文及原版本重放返回首次结果，带 `Idempotent-Replayed: true`，不重复写回复或审计；即使之后工单已关闭也可重放成功结果。同键异正文/版本返回 409 IDEMPOTENCY_CONFLICT，进行中返回 409 REQUEST_IN_PROGRESS。缺版本为 428 PRECONDITION_REQUIRED，非法版本/键为 400 VALIDATION_FAILED，旧版本为 409 VERSION_CONFLICT。
+- NEW、IN_PROGRESS、ON_HOLD、RESOLVED 均允许追加；CLOSED 返回 409 INVALID_STATE，提示新建工单。公开回复允许提单人、工程师、管理员；工程师、管理员可在全部可见工单追加，不限负责人。员工仅能回复本人提单，不能添加内部备注（403 FORBIDDEN）。回复、工单版本、审计、成功幂等结果同事务提交，回复与关闭通过同一工单行锁串行。
+- 两个 GET 均支持 Query `page`（默认 1，整数且 ≥1），固定 pageSize=20，按 createdAt、id 升序；data 为 `items`、`page`、`pageSize`、`total`。非法 page 为 400 INVALID_QUERY；超出末页返回空 items 与实际 total。GET 不更新工单、审计、幂等或会话活动时间。
+- GET replies 合并公开回复与内部备注，每项为 `id`、`content`、`visibility`（PUBLIC/INTERNAL）、`authorId`、`authorName`、`createdAt`。员工只收到 PUBLIC 项，分页和 total 均先过滤；工程师、管理员可读取全部。姓名来自当前成员姓名。
+- GET operations 返回已有 M03 流转及本阶段新增回复/备注动作，每项为 `id`、`action`、`actorId`、`actorName`、`createdAt`、`details`。action 沿用审计编码：TICKET_CLAIM、TICKET_ASSIGNMENTS、TICKET_TRANSFERS、TICKET_SUSPENSIONS、TICKET_RESUME、TICKET_RESOLUTIONS、TICKET_CLOSE、TICKET_REOPEN、TICKET_PRIORITY_CHANGES；新增 TICKET_REPLY、TICKET_INTERNAL_NOTE。不返回成员审计或未知类型审计。
+- 员工 operations 在查询时排除 TICKET_INTERNAL_NOTE。回复/备注的 details 只含 replyId，不复制正文；流转的 details 含 before/after，字段只允许 status、assigneeId、priority、summary（公开解决摘要）、closedAt、cycleStartedAt。仅工程师、管理员在流转 details 中可另读 reason；员工不收到原因、内部审计字段或原始审计载荷。
+- 不存在或员工不可见的工单统一 404 RESOURCE_NOT_FOUND；未登录/失效 401 SESSION_EXPIRED，CSRF 错误 403 CSRF_INVALID，其余沿用通用错误。本阶段不计算首次响应或 SLA，PRD Q01 留待 M07 确认。
+- 详情页接入回复/操作记录独立分页、公开回复及员工不可选的内部备注。正文按纯文本展示，内部备注明确标识；已关闭单展示限制与新建入口。发表成功刷新详情版本及记录，并显示最新页；结果不确定时保留原正文/路径/版本/幂等键、锁定表单重试，版本或状态冲突保留错误及正文并刷新详情，由用户重新确认。与 M03 写操作互相禁用，避免同页并行提交。
+- 附件细则已由用户确认。POST attachments 为 multipart/form-data，是 JSON 正文约定的例外；必须且仅提供一个文件 part `file` 和一个文本字段 `visibility`（PUBLIC/INTERNAL），重复/未知字段或多文件返回 400 VALIDATION_FAILED。单文件 1～10485760 字节（10 MiB，含上限），空文件 400、超限 413 REQUEST_TOO_LARGE；请求总大小额外允许 64 KiB 表单开销，其余 JSON 大小规则不变。不限制扩展名，不做预览或执行。
+- 附件上传需要 If-Match、Idempotency-Key，成功 HTTP 200，返回现有工单 `resourceId`、`acceptedVersion`、`replayed` 及 ETag；递增工单 version，不改变状态/负责人/轮次。幂等作用域同回复，请求摘要含原始文件名、SHA-256 内容哈希、visibility 及原版本。同键原文件/名称/可见性/原版本重放不重复写文件，即使之后已关闭也返回首次结果；任一项改变为 409 IDEMPOTENCY_CONFLICT。同键正在处理、版本缺失/非法/冲突沿用回复错误规则。
+- 上传状态与范围同公开回复；员工仅能给本人提单上传 PUBLIC，INTERNAL 为 403 FORBIDDEN。工程师、管理员可为全部可见工单上传公开或内部附件，不限负责人。CLOSED 禁止上传（409 INVALID_STATE），但保留已有附件下载能力。
+- GET attachments 使用 page（默认1，≥1整数）、固定 pageSize=20、createdAt/id 升序，返回 items/page/pageSize/total；每项为 id、fileName、size（字节）、visibility、uploaderId、uploaderName、createdAt。员工的内部项在查询和计数前排除；不返回路径、哈希或账号凭据。非法 page 为 400 INVALID_QUERY，不存在/不可见工单为 404 RESOURCE_NOT_FOUND。
+- 下载成功 HTTP 200，返回原文件二进制，不使用统一 JSON 成功包装；Content-Type=application/octet-stream，Content-Disposition=attachment（UTF-8 安全原名），Content-Length 为字节数，Cache-Control=no-store、X-Content-Type-Options=nosniff。员工只能下载本人提单的公开附件；内部附件对员工、他人工单附件对员工、不存在附件统一 404 RESOURCE_NOT_FOUND。失效会话 401，存储文件缺失/异常 503 DEPENDENCY_UNAVAILABLE，错误仍用统一 JSON。
+- 上传增加 TICKET_ATTACHMENT / TICKET_INTERNAL_ATTACHMENT 操作，details 只含 attachmentId、fileName、size；员工的内部上传操作在分页/计数前过滤。文件名仅用于安全处理后的下载/展示，物理文件用随机 UUID 保存。成功附件不自动清理；事务回滚清理本次文件，进程异常/提交结果未知的残留保留人工核对，不提供暂存或删除接口。
+- 前端附件区独立分页、按权限选择公开/内部、文件大小校验及鉴权下载；上传保留 File/FormData、可见性、原版本和幂等键以重试，提交中或结果不确定时锁定选择，版本/状态冲突保留文件及错误并刷新详情，等待用户确认。上传与回复/流转互相禁用；关闭后隐藏上传入口，已有可见附件仍可下载。
 
-### M05 列表与检索（未实现）
+### M05 列表与检索（前后端已实现，暂不含 M07 SLA）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -305,10 +331,14 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 参数要点：
 
-- view 取值：MINE（本人提交）、ASSIGNED（本人负责）、UNASSIGNED（无主队列）、ALL。
-- MINE 全角色可用；ASSIGNED、UNASSIGNED、ALL 仅工程师、管理员。
-- 组合条件：状态、业务类型、关键词（q）、page 分页，风格同 GET /api/v1/users。
-- 列表项与详情包含 M07 的 SLA 字段。
+- 本节细则已由用户在 M05 开发前确认。Query `view` 默认 MINE，取值 MINE（本人提交）、ASSIGNED（本人负责）、UNASSIGNED（负责人为空）、ALL。MINE 全角色可用；其他视图仅工程师、管理员，员工访问返回 403 FORBIDDEN。
+- Query `page` 默认 1，须为 ≥1 的整数，pageSize 固定 20；按 createdAt 倒序、id 倒序排列。成功 HTTP 200，data 为 items、page、pageSize、total。超出末页返回空 items，保留实际总数。
+- 可选组合条件：`status`（NEW/IN_PROGRESS/ON_HOLD/RESOLVED/CLOSED）、`businessType`（去首尾空白后的非空字符串，精确匹配）、`q`（去首尾空白后 1～100 个 Unicode 码点）。q 不区分大小写，按编号、标题、描述包含匹配；百分号、下划线和反斜杠按字面字符处理。视图、筛选与关键词条件同时生效。
+- 非法 view/page/status、空白 businessType 或无效 q 返回 400 INVALID_QUERY；省略可选筛选即可，不传空字符串。UUID 路径格式非法返回 400 VALIDATION_FAILED。不存在或员工无权查看的详情统一返回 404 RESOURCE_NOT_FOUND；未登录返回 401 SESSION_EXPIRED，沿用统一错误结构。
+- 列表项与详情均返回：id、number、title、description、businessType、impactScope、requesterId、requesterName、assigneeId、assigneeName、status、priority、version、createdAt、resolutionSummary、closedAt、cycleStartedAt。未分派的 assigneeId/assigneeName 为 null；无解决摘要或关闭时间时相应字段为 null。不返回账号邮箱、密码、令牌或内部审计原因。
+- 员工只可读取本人提交的工单；工程师、管理员可读取全部工单详情。解决摘要按工单可见性公开展示。GET 不修改工单、不创建审计或幂等记录，也不延长会话。
+- 前端 `/tickets?view=…` 对接列表、筛选、搜索和分页，`/tickets/{id}` 展示真实详情及解决摘要并接入 M03 操作区和 M04 回复/备注/附件/操作记录；提单成功可进入详情。
+- 按用户确认，本阶段不返回或显示 SLA 字段，不使用假指标；待 M07 实现后补齐原设计中的 SLA 数据。
 
 ### M06 邮件通知（账号邮件后台投递已接入；工单通知未实现）
 

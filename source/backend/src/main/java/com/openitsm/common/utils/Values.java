@@ -9,6 +9,12 @@ public final class Values {
 
     private Values() {}
 
+    public static String jsonText(com.fasterxml.jackson.databind.JsonNode value, String field) {
+        if (value == null || value.isNull()) return null;
+        if (!value.isTextual()) throw BusinessException.field(field, "字段必须为字符串");
+        return value.textValue();
+    }
+
     public static String email(String input) {
         if (input == null || input.isBlank()) throw BusinessException.field("email", "请输入邮箱");
         String value = input.strip().toLowerCase(Locale.ROOT);

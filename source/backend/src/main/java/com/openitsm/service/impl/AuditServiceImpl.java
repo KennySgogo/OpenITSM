@@ -20,4 +20,10 @@ public class AuditServiceImpl implements AuditService {
             mapper.insert(actor, action, target, json.writeValueAsString(changes), reason, requestId, clock.instant());
         } catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalStateException(ex); }
     }
+
+    public void appendTicket(UUID actor, String action, UUID target, Map<String, ?> changes, String reason, UUID requestId) {
+        try {
+            mapper.insertTicket(UUID.randomUUID(), actor, action, target, json.writeValueAsString(changes), reason, requestId, clock.instant());
+        } catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalStateException(ex); }
+    }
 }

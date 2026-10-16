@@ -80,7 +80,17 @@ source/
 
 投递前解密并核对 token 哈希、所属成员、用途、代次、使用状态、有效期及成员状态；无效任务结束为 FAILED。SMTP 已接收但回写失败时保留 RUNNING，待租约回收后复用同一令牌重试，因此可能收到重复邮件，不能保证恰好发送一次。失败有上限退避，耗尽租约的最终尝试结束为 TIMEOUT；不删除历史记录。
 
-### 前端组织
+### 附件存储
+
+附件沿用 Controller → Service → Mapper，不新增架构层或依赖。`TicketAttachmentServiceImpl` 负责权限、版本、幂等、文件读写及失败补偿；`AttachmentConfig` 绑定专用目录。V6 的 ticket_attachment 只存元数据与 SHA-256，文件使用 UUID 命名，不使用客户端路径作为存储路径，不放入静态资源目录。
+
+从 `source/backend` 启动时默认目录为 `.local/attachments`，已加入后端 Git 忽略；`OPENITSM_ATTACHMENT_ROOT` 可用进程环境指定绝对路径。其他启动目录应显式指定该变量，避免工作目录改变存储位置。不修改 `.env`，不引入对象存储；变更存储目录时须先停止上传、迁移全部文件并核对元数据/哈希，再切换目录，不单独切换配置丢失既有文件。
+
+BrowserSecurityFilter 仅对附件上传 POST 放行 multipart，仍先校验会话、Origin 和 CSRF；Servlet 限制文件 10 MiB、总请求额外允许 64 KiB 表单开销，其余请求保留 256 KiB 限制。Service 计算内容摘要，沿用成员行→工单行锁，版本递增、审计、元数据和成功幂等同事务提交。文件以 CREATE_NEW 写入，事务明确回滚时只清理本次文件；提交结果未知、清理失败或进程异常退出时保留残留待人工核对，不自动扫描删除。数据库与文件目录必须一起备份和恢复。
+
+列表、下载和操作记录均校验工单可见性，员工在数据库分页统计前过滤内部附件。下载只返回 octet-stream 与 attachment 处置，不返回本地路径或哈希；文件不存在/异常为依赖不可用。ready 同时检查数据库和附件目录是否为可读写目录；该检查不能保证磁盘余量或识别所有文件损坏，具体读写失败仍由接口返回 503。
+
+### 前端页面组织
 
 前端使用 Vue Router 管理页面，Vue 响应式状态保存内存会话，原生 fetch 统一请求；无需额外状态管理或 HTTP 依赖。页面放 `views/`，可复用 UI 放 `components/`，接口通信放 `api/`，会话放 `stores/`。Vue / TypeScript 使用两个空格缩进。
 

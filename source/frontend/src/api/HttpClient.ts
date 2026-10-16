@@ -22,6 +22,7 @@ export interface RequestOptions {
   body?: unknown;
   version?: number;
   key?: string;
+  binary?: boolean;
 }
 let csrfToken = '';
 let csrfRequest: Promise<void> | undefined;
@@ -45,20 +46,25 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
   if (writing && !csrfToken) await refreshCsrf();
   const headers: Record<string, string> = {};
   if (writing) headers['X-CSRF-Token'] = csrfToken;
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  const multipart = options.body instanceof FormData;
+  if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json';
   if (options.version !== undefined) headers['If-Match'] = `"${options.version}"`;
   if (options.key) headers['Idempotency-Key'] = options.key;
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
       method, credentials: 'include', headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.body === undefined ? undefined : multipart ? options.body as FormData : JSON.stringify(options.body),
       signal: AbortSignal.timeout(20000)
     });
   } catch {
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: '无法连接服务，请检查网络后重试', retryable: true });
   }
   if (response.status === 204) return undefined as T;
+  if (response.ok && options.binary) {
+    try { return await response.blob() as T; }
+    catch { throw new ApiError(0, { code: 'NETWORK_ERROR', message: '下载未完成，请重试', retryable: true }); }
+  }
   let envelope;
   try { envelope = await response.json(); }
   catch { throw new ApiError(response.status, { code: 'INVALID_RESPONSE', message: '服务响应无法解析，请稍后重试' }); }

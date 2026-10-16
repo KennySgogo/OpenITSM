@@ -1,4 +1,4 @@
-# M01 backend
+# M01 / M02 / M03 backend
 
 Java 21 / Maven 3.9.16。需求与接口以仓库 PRD.md 和 ARCHITECTURE.md 为准，当前进度与已知问题见 STATUS.md。
 
@@ -76,6 +76,28 @@ AccountMailDispatchTest 使用独立 PostgreSQL 测试库、本地 SMTP 和可�
 
 ## 后续模块边界
 
-M02 建立 ticket 表后，`TicketMapper` 自动检查 status != CLOSED 的全部名下工单，包括 RESOLVED。工单表尚不存在时计数为零；若已有表结构不兼容则报错，不能降级为零。M03 的分派/交接事务必须先锁定目标 app_user 并核对 ACTIVE ENGINEER，再修改 ticket；与停用/降级共享成员行锁。M01 尚不提供工单转派/HANDOVER 接口，相关端到端验收待 M03。
+M02 已通过 V3 建立 ticket 表及编号序列。`POST /api/v1/tickets` 使用现有登录 Cookie、Origin、CSRF 和 Idempotency-Key，创建不需 If-Match；请求/响应见根目录 API.md。M02HttpTest 通过真实 HTTP 和隔离 PostgreSQL 验证提单、校验、幂等、并发及健康状态，前端已接入提单页面。
 
-开发 OpenAPI 只在 local profile 开启；/health/live、/health/ready 只允许 loopback。当前 readiness 验证数据库可查询；附件卷检查随 M04 接入。无 CI、容器发布或生产部署改动。
+M03 后端提供认领/受理、分派、转派、挂起、恢复、解决、关闭、重开和调整优先级，均需当前工单 If-Match 与 Idempotency-Key。V4 增加优先级（新旧工单默认 P3）、解决摘要、关闭时间及轮次起点，未修改 V1～V3。重开清空关闭时间并重置轮次起点，保留有效负责人，原负责人已停用或降级时清空，由管理员后续分派；尚不计算 M07 SLA。
+
+`TicketMapper` 检查 status != CLOSED 的全部名下工单，包括 RESOLVED；M03 沿用 M01 的成员控制锁，再锁成员行与工单行，分派前核对 ACTIVE ENGINEER，避免与停用/降级竞争产生无效负责人。工单变更、原因审计和成功幂等记录使用同一事务。M03HttpTest 使用真实 HTTP、隔离 PostgreSQL 和可控时钟覆盖九个动作、权限、幂等、并发、七天边界、回滚与 V3 升级；不发真实邮件。
+
+M03 前端已通过 M05 详情接入九个流转动作，未扩展 M04。测试可显式设置 `OPENITSM_M03_HOLD_SECONDS`（最多 600 秒），在 M03HttpTest 结束后短暂保留隔离数据库，供独立打包应用联调；默认不等待。
+
+M05 提供 `GET /api/v1/tickets` 与 `GET /api/v1/tickets/{id}`，复用现有工单表，无新增迁移。四个视图、固定 20 条分页、精确筛选、关键词字面子串检索及权限规则见 API.md；返回真实姓名和版本，不返回敏感账号字段或尚未实现的 SLA。M05HttpTest 通过真实 HTTP 和 PostgreSQL 验证查询、权限和无写入副作用；`OPENITSM_M05_HOLD_SECONDS` 可在测试结束后保留隔离夹具最多 300 秒供浏览器联调，默认不等待。
+
+M04 第一阶段提供公开回复、内部备注及操作记录的四个接口，规格见 API.md。V5 新增 ticket_reply 与时间线索引，复用现有工单 version、审计和幂等表；未修改旧迁移。员工的内部项在查询及分页统计前过滤，操作记录不向员工暴露内部原因或原始审计。详情页已接入，不计算首次响应或 SLA。
+
+`mvn -o -B -Dtest=M04HttpTest test` 运行真实 HTTP 与隔离 PostgreSQL 验证。先 `mvn -o -B verify` 生成最新 JAR 后，可在该测试进程中设置 `OPENITSM_M04_PACKAGED_VERIFY=true`，在测试结束时额外启动独立 JAR、验证健康与四接口并自动停止；此模式要求默认 Testcontainers 数据库，不使用已有数据库选项，禁止真实邮件发送。日志为 target/m04-packaged-app.log。
+
+浏览器验收可显式设置 `OPENITSM_M04_HOLD_SECONDS`，测试后重新初始化隔离三角色账号并保留夹具最多 1200 秒，默认不等待；输出就绪地址及测试密钥文件路径，不输出密钥内容。可设置 `OPENITSM_M04_RELEASE_FILE` 为本次唯一的 target/ 文件路径，验收结束创建该标记即可提前结束等待并正常清理。该模式同样仅使用默认 Testcontainers，不使用业务数据库。
+
+### M04 附件存储与验证
+
+V6 新增 ticket_attachment 元数据表，不修改 V1～V5；实际文件由 Java 写入专用目录，使用随机 UUID 名称。默认从本目录启动时目录为 `.local/attachments`，已加入 Git 忽略。通过进程环境 `OPENITSM_ATTACHMENT_ROOT` 可指定绝对目录；从仓库根目录等其他位置启动时应显式指定，避免相对路径指向不同位置。不修改 `.env`，不安装额外存储依赖。
+
+上传大小为 1～10485760 字节（10 MiB，含上限），Servlet 总请求额外容许 64 KiB 表单开销；仅上传接口支持 multipart。权限、字段、If-Match、幂等及下载响应见 API.md；下载不走静态文件服务。成功文件不自动清理，事务明确回滚清理本次文件；清理失败、进程异常或提交结果未知的残留只记录并保留人工核对。未提供暂存、删除或定时清理功能。备份/恢复必须同时包含数据库和文件目录。
+
+`mvn -o -B -Dtest=M04AttachmentHttpTest test` 使用真实 TCP HTTP、隔离 PostgreSQL 和专用临时文件目录验证三角色、大小边界/chunked、分页、幂等/版本并发、文件回滚清理、存储故障和 V5→V6 数据保留。浏览器复用上述 M04 夹具，额外启动 JAR 时将附件根目录指向 target/ 内的验收专用目录；不使用业务附件。
+
+开发 OpenAPI 只在 local profile 开启；/health/live、/health/ready 只允许 loopback。readiness 验证数据库可查询及附件目录存在、可读写，不能保证剩余磁盘空间或检测全部文件损坏；具体文件读写失败返回 503。无 CI、容器发布或生产部署改动。
