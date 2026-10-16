@@ -1,6 +1,11 @@
 spring:
   application:
     name: openitsm-backend
+  servlet:
+    multipart:
+      max-file-size: 10485760B
+      max-request-size: 10551296B
+      file-size-threshold: 0B
   datasource:
     url: ${OPENITSM_DB_URL:jdbc:postgresql://127.0.0.1:5432/openitsm}
     username: ${OPENITSM_DB_USER:admin}
@@ -33,6 +38,8 @@ springdoc:
   swagger-ui:
     enabled: false
 openitsm:
+  attachments:
+    root: ${OPENITSM_ATTACHMENT_ROOT:./.local/attachments}
   account-mail:
     enabled: ${OPENITSM_ACCOUNT_MAIL_ENABLED:false}
     from: ${OPENITSM_MAIL_FROM:}

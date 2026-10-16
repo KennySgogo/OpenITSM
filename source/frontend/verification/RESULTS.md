@@ -1,5 +1,27 @@
 # 前端验证记录
 
+## M04 附件前后端验收（2026-10-16，Asia/Ulaanbaatar）
+
+- 最终类型检查通过，Vite 构建成功（1652 模块，保留既有主包 >500 KB 告警），16 项前端测试全部通过；新增 FormData 经 CSRF 刷新后保留原请求、二进制下载和错误/401 处理验证。日志 `m04-attachments-typecheck.log`、`m04-attachments-build.log`、`m04-attachments-tests.log`。
+- 最终 `mvn -o -B verify`：104 项、0 失败/错误/跳过，BUILD SUCCESS；新增 9 项真实 HTTP 附件测试，覆盖三角色/四种允许状态及关闭限制、10 MiB 精确边界和分块请求、输入与 CSRF、幂等摘要/重放、并发、分页过滤、失败回滚清理、存储故障及 V5→V6 保留旧工单/回复/审计升级。日志 `source/backend/target/m04-attachments-verify.log`。
+- 最终 JAR 实际启动 OpenItsmApplication（local、18088、Flyway V6），live/ready 均 200 UP。只读真实 HTTP 复核员工附件 23 条、管理员 24 条；管理员内部附件下载 200、application/octet-stream、50 字节，SHA-256 与源文件一致，员工下载同一内部附件 404。日志 `source/backend/target/m04-attachments-app-final.log`、`m04-attachments-runtime-final.log`。
+- 浏览器使用临时 Vite 5178 和隔离 Testcontainers PostgreSQL 17.11：员工真实提单、空文件/超限提示、公开上传/下载；工程师上传和下载内部附件；员工重新登录后看不到内部附件或其操作。浏览器完成附件 20+3 分页、独立操作记录分页、解决后上传、关闭后隐藏上传但仍可真实下载。本阶段管理员通过真实 HTTP 覆盖，未重复全部 M01 浏览器验收。
+- 实际停止后端后上传，出现错误并锁定文件/可见性，回复按钮禁用；恢复同一隔离库后手动“重试原上传”成功。两个页面保留同一版本，一页上传后另一页提交显示版本冲突，文件和错误保留、工单刷新，无自动重提。
+- 数据库核对验收工单 ITSM-14：CLOSED、version=27，23 PUBLIC/1 INTERNAL 附件、27 条审计、28 条成功幂等记录（含提单），`retry-log.txt` 仅 1 条；磁盘共 24 个 UUID 文件。证据 `source/backend/target/m04-attachments-db-check.log`。浏览器实际下载的公开/内部文件 SHA-256 分别为 `D12801A5E4AF4DE6C383F40EEE7E60FA039D2EFA9B7E61372AD7A25DAEFD1668`、`E912095B76DDE4BD99C3600E4F1AAA0D89809D4514D0835A3DC29F66A25D9197`，均与源文件一致。
+- 截图：[工程师附件区](./m04-attachments-staff.png)、[断连重试锁定](./m04-attachment-retry.png)、[版本冲突](./m04-attachment-conflict.png)、[员工关闭限制与过滤分页](./m04-attachments-employee.png)。成功文件保留，异常退出残留不自动扫描删除；无暂存或删除接口。未连接业务库、未改 `.env`、未发真实邮件，未提交或推送。
+- 收尾已停止本次临时 JAR/Vite，18088/5178 无监听；释放保留夹具后正常结束，9 项测试、0 失败/错误/跳过、BUILD SUCCESS。日志 `source/backend/target/m04-attachments-fixture.log`。
+
+## M04 沟通与操作记录验收（2026-10-16，Asia/Ulaanbaatar）
+
+- 类型检查通过；Vite 构建成功，1649 模块，保留既有主包 >500 KB 告警。`npm test`：14 项通过，新增沟通角色/状态边界及公开流转字段展示测试；日志 `m04-typecheck.log`、`m04-build.log`、`m04-tests.log`。
+- 最终 `mvn -o -B verify`：95 项、0 失败/错误/跳过，BUILD SUCCESS；日志 `source/backend/target/m04-frontend-verify.log`。本阶段未修改后端业务或迁移，仅为 M04HttpTest 增加可选保留夹具（最长 1200 秒、默认关闭）及提前释放标记。
+- 独立 JAR 实际启动 OpenItsmApplication，local、18087、Flyway V5；Vite 5177 对接本次 Testcontainers PostgreSQL 17.11。live/ready 均实际取得 200 UP；启动日志 `source/backend/target/m04-frontend-app.log`、`m04-frontend-app-restart.log`。未连接业务库、未改 `.env` 或默认端口、未发真实邮件。
+- 员工真实提单 ITSM-14，空回复出现必填提示；公开回复成功后正文清空、记录刷新，`<script>` 作为文本显示。工程师在未负责工单上可公开回复及内部备注，管理员也可添加内部备注；内部内容和可见性提示明确。员工重新登录后只收到 24 条公开回复及 27 条公开操作，均隐藏两条内部备注及其操作，关闭记录不显示管理员内部原因；管理员可见 26 条沟通记录及 29 条操作。
+- 19 条分页测试数据通过真实 HTTP 回复接口创建；浏览器实际验证 20 条/页、两区独立翻页、成功发表后显示最新页。M03 认领、解决及关闭均通过浏览器实际调用，状态变化和公开解决摘要同步出现在操作记录；RESOLVED 可回复，CLOSED 隐藏编辑区并显示新建入口。
+- 两页面保留同版本：一页发表成功，另一页提交显示后端版本冲突，保留原正文和错误、刷新工单，无自动重提。实际停止本次后端后发表，显示响应错误，正文和方式锁定、M03 按钮禁用；恢复同一隔离库后“重试原请求”成功。数据库核对 ITSM-14 为 CLOSED、version=29，24 PUBLIC/2 INTERNAL、29 条工单审计、30 条成功幂等记录（含提单），重试文本仅 1 条；证据 `source/backend/target/m04-frontend-db-check.log`。
+- 截图：[员工公开回复](./m04-employee.png)、[内部备注与操作记录](./m04-staff.png)、[版本冲突](./m04-conflict.png)、[员工关闭限制与过滤](./m04-employee-closed.png)。本阶段未实现附件/SLA，也未重复完整 M01 浏览器验收；已有模块由完整后端回归及前端测试验证。
+- 收尾时客户端闪退；恢复后核对本次 5177/18087 服务及隔离容器已结束。保留夹具命令未留下最终完成报告，因此不把该命令计为测试通过；95 项结论来自已正常结束的最终 verify。未自动提交或推送。
+
 ## M03 前端验收（2026-10-16，Asia/Ulaanbaatar）
 
 - 类型检查通过；Vite 构建成功，1645 模块，保留既有主包 >500 KB 告警。`npm test`：12 项通过，新增角色/负责人/状态权限及关闭后七天含边界、超界和无关闭时间测试。

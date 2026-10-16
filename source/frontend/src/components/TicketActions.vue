@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref } from 'vue';
+import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from './ErrorNotice.vue';
@@ -11,8 +11,8 @@ import { ticketOperations, ticketOperationLabels } from '../utils/TicketPolicy';
 import type { TicketOperation } from '../utils/TicketPolicy';
 import type { Ticket, TicketAction, Assignee } from '../types/ApiTypes';
 
-const props = defineProps<{ ticket: Ticket; refreshing: boolean }>();
-const emit = defineEmits<{ refresh: [] }>();
+const props = defineProps<{ ticket: Ticket; refreshing: boolean; externalBlocked?: boolean }>();
+const emit = defineEmits<{ refresh: []; lock: [value: boolean] }>();
 const { error, busy, blocked, waitSeconds, showError } = useFeedback();
 const now = ref(Date.now());
 const timer = window.setInterval(() => { now.value = Date.now(); }, 1000);
@@ -25,6 +25,8 @@ const model = reactive({ assigneeId: '', reason: '', summary: '', priority: 'P3'
 const assignees = ref<Assignee[]>([]);
 const candidatesReady = ref(false);
 const pending = ref<{ path: string; options: RequestOptions }>();
+watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
+onUnmounted(() => emit('lock', false));
 const choosingAssignee = computed(() => ['assignments', 'transfers'].includes(operation.value));
 const needsReason = computed(() => ['suspensions', 'reopen', 'priority-changes'].includes(operation.value)
   || (operation.value === 'close' && props.ticket.requesterId !== sessionState.session?.user.id));
@@ -46,7 +48,7 @@ async function loadAssignees() {
   finally { busy.value = false; }
 }
 function open(action: TicketOperation) {
-  if (blocked.value || props.refreshing || !sessionState.session || !ticketOperations(props.ticket, sessionState.session.user).includes(action)) return;
+  if (blocked.value || props.refreshing || props.externalBlocked || !sessionState.session || !ticketOperations(props.ticket, sessionState.session.user).includes(action)) return;
   operation.value = action;
   Object.assign(model, { assigneeId: '', reason: '', summary: '', priority: props.ticket.priority });
   pending.value = undefined;
@@ -55,7 +57,7 @@ function open(action: TicketOperation) {
   if (choosingAssignee.value) void loadAssignees();
 }
 async function submit() {
-  if (blocked.value || (choosingAssignee.value && !candidatesReady.value)) return;
+  if (blocked.value || props.refreshing || props.externalBlocked || (choosingAssignee.value && !candidatesReady.value)) return;
   busy.value = true;
   try {
     if (!pending.value) {
@@ -93,7 +95,7 @@ async function submit() {
   <section class="ticket-actions">
     <h3>工单操作</h3>
     <ErrorNotice v-if="!dialog" :error="error" />
-    <div class="action-buttons"><ElButton v-for="action in actions" :key="action" :disabled="blocked || refreshing" @click="open(action)">{{ ticketOperationLabels[action] }}</ElButton></div>
+    <div class="action-buttons"><ElButton v-for="action in actions" :key="action" :disabled="blocked || refreshing || externalBlocked" @click="open(action)">{{ ticketOperationLabels[action] }}</ElButton></div>
     <p v-if="!actions.length">当前角色或状态下无可用操作。</p>
     <ElDialog v-model="dialog" :title="ticketOperationLabels[operation]" width="500px" :close-on-click-modal="false" :close-on-press-escape="!busy && !pending" :show-close="!busy && !pending" :before-close="(done: () => void) => { if (!busy && !pending) done(); }" destroy-on-close>
       <p>{{ ticket.number }} · {{ ticket.title }}</p>
@@ -110,7 +112,7 @@ async function submit() {
       <template #footer>
         <ElButton :disabled="busy || !!pending" @click="dialog = false">取消</ElButton>
         <ElButton v-if="choosingAssignee && !candidatesReady" :disabled="blocked" @click="loadAssignees">重新加载工程师</ElButton>
-        <ElButton type="primary" :loading="busy" :disabled="blocked || (choosingAssignee && !candidatesReady)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原操作' : '确认操作' }}</ElButton>
+        <ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (choosingAssignee && !candidatesReady)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原操作' : '确认操作' }}</ElButton>
       </template>
     </ElDialog>
   </section>

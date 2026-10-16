@@ -52,6 +52,29 @@ export interface Ticket {
 }
 export interface TicketPage { items: Ticket[]; page: number; pageSize: number; total: number }
 export interface TicketAction { resourceId: string; acceptedVersion: number; replayed: boolean }
+export interface TicketReply {
+  id: string; content: string; visibility: 'PUBLIC' | 'INTERNAL';
+  authorId: string; authorName: string; createdAt: string;
+}
+export interface TicketReplyPage { items: TicketReply[]; page: number; pageSize: number; total: number }
+export interface TicketHistoryOperation {
+  id: string; action: string; actorId: string | null; actorName: string | null; createdAt: string;
+  details: {
+    replyId?: string;
+    attachmentId?: string;
+    fileName?: string;
+    size?: number;
+    before?: Record<string, string | null>;
+    after?: Record<string, string | null>;
+    reason?: string;
+  };
+}
+export interface TicketOperationPage { items: TicketHistoryOperation[]; page: number; pageSize: number; total: number }
+export interface TicketAttachment {
+  id: string; fileName: string; size: number; visibility: 'PUBLIC' | 'INTERNAL';
+  uploaderId: string; uploaderName: string; createdAt: string;
+}
+export interface TicketAttachmentPage { items: TicketAttachment[]; page: number; pageSize: number; total: number }
 export interface Assignee { id: string; name: string; unresolvedCount: number; pendingConfirmationCount: number }
 export const ticketViewLabels: Record<TicketView, string> = { MINE: '我的工单', ASSIGNED: '我的待办', UNASSIGNED: '未分派队列', ALL: '全部工单' };
 export const ticketStatusLabels: Record<TicketStatus, string> = { NEW: '新建', IN_PROGRESS: '处理中', ON_HOLD: '已挂起', RESOLVED: '已解决', CLOSED: '已关闭' };

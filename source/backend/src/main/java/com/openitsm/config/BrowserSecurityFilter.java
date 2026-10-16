@@ -52,7 +52,12 @@ public class BrowserSecurityFilter extends OncePerRequestFilter {
             }
             if (!path.startsWith("/api/")) { chain.doFilter(req, res); return; }
             if (!secure && !InetAddress.getByName(req.getRemoteAddr()).isLoopbackAddress()) throw new BusinessException(403, "FORBIDDEN", "开发会话只允许本机访问");
-            if (req.getContentLengthLong() > 256 * 1024) throw new BusinessException(413, "REQUEST_TOO_LARGE", "请求正文超过 256 KiB");
+            boolean attachmentUpload = req.getMethod().equals("POST")
+                && path.matches("/api/v1/tickets/[0-9a-fA-F-]{36}/attachments")
+                && req.getContentType() != null && req.getContentType().toLowerCase(java.util.Locale.ROOT).startsWith("multipart/form-data;");
+            long limit = attachmentUpload ? AttachmentConfig.MAX_REQUEST_SIZE : 256 * 1024;
+            if (req.getContentLengthLong() > limit) throw new BusinessException(413, "REQUEST_TOO_LARGE",
+                attachmentUpload ? "附件上传请求过大" : "请求正文超过 256 KiB");
             String raw = cookie(req);
             var resolved = sessions.resolve(raw);
             AuthSessionEntity session = resolved.context().session();
@@ -74,7 +79,7 @@ public class BrowserSecurityFilter extends OncePerRequestFilter {
                     List.of(new SimpleGrantedAuthority("ROLE_" + user.role))));
             }
             req.setAttribute("auth", new AuthContext(expired && !logout ? null : session, expired ? null : user, raw));
-            if (write) req = BoundedJsonRequest.read(req);
+            if (write && !attachmentUpload) req = BoundedJsonRequest.read(req);
             chain.doFilter(req, res);
         } catch (BusinessException ex) {
             GlobalExceptionHandler.write(json, req, res, ex);

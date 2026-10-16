@@ -22,6 +22,17 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 public class GlobalExceptionHandler {
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    ResponseEntity<?> uploadSize(Exception ex, HttpServletRequest req) {
+        return known(new BusinessException(413, "REQUEST_TOO_LARGE", "请求正文超过大小限制"), req);
+    }
+
+    @ExceptionHandler({org.springframework.web.multipart.MultipartException.class,
+        org.springframework.web.bind.MissingServletRequestParameterException.class})
+    ResponseEntity<?> multipart(Exception ex, HttpServletRequest req) {
+        return known(new BusinessException(400, "VALIDATION_FAILED", "请求格式或字段不正确"), req);
+    }
+
     public static Map<String, Object> body(HttpServletRequest req, BusinessException ex) {
         return Map.of("error", Map.of("code", ex.code, "message", ex.getMessage(),
             "fieldErrors", ex.fields, "retryable", ex.status == 429 || ex.status == 503),
@@ -60,7 +71,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<?> media(Exception ex, HttpServletRequest req) {
-        return known(new BusinessException(415, "MEDIA_TYPE_UNSUPPORTED", "请使用 JSON 请求正文"), req);
+        return known(new BusinessException(415, "MEDIA_TYPE_UNSUPPORTED", "请求正文类型不支持"), req);
     }
 
     @ExceptionHandler(DataAccessException.class)

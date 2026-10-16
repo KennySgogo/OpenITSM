@@ -3,6 +3,8 @@ import { onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import TicketActions from '../components/TicketActions.vue';
+import TicketCommunication from '../components/TicketCommunication.vue';
+import TicketAttachments from '../components/TicketAttachments.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels } from '../types/ApiTypes';
@@ -10,6 +12,9 @@ import type { Ticket } from '../types/ApiTypes';
 const route = useRoute();
 const { error, busy, blocked, waitSeconds, showError } = useFeedback();
 const ticket = ref<Ticket>();
+const actionLocked = ref(false);
+const communicationLocked = ref(false);
+const attachmentLocked = ref(false);
 let sequence = 0;
 onUnmounted(() => { sequence++; });
 async function load(keepTicket = false) {
@@ -42,7 +47,9 @@ watch(() => route.params.id, () => load(), { immediate: true });
       <template v-if="ticket.resolutionSummary"><h3>解决摘要</h3><p class="ticket-text">{{ ticket.resolutionSummary }}</p></template>
     </template>
   </section>
-  <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" @refresh="load(true)" />
+  <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="communicationLocked || attachmentLocked" @lock="actionLocked = $event" @refresh="load(true)" />
+  <TicketCommunication v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || attachmentLocked" @lock="communicationLocked = $event" @refresh="load(true)" />
+  <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
 </template>
 
 <style scoped>

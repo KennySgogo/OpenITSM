@@ -4,8 +4,8 @@
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
 - 接口前缀：`/api/v1`（健康检查除外）
-- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、列表详情与检索（M05 前后端，暂不含 SLA）
-- M04、M06 及之后模块：未实现（本文档含接口设计稿）
+- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/操作记录（M04 前后端）、列表详情与检索（M05 前后端，暂不含 SLA）
+- M04 已完成回复、内部备注、附件及操作记录；M06 及之后模块尚未完整实现（本文档含接口设计稿）
 
 ## 通用约定
 
@@ -58,8 +58,8 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | Content-Type: application/json | 有请求正文的接口 | 正文必须是合法 JSON |
 | Origin | 所有写请求 | 见 CSRF 一节 |
 | X-CSRF-Token | 所有写请求 | 见 CSRF 一节 |
-| If-Match | 成员管理及 M03 写操作 | `"<version>"`，如 `"3"`；见乐观版本与幂等键 |
-| Idempotency-Key | 成员管理、M02 创建及 M03 写操作 | UUID；见乐观版本与幂等键 |
+| If-Match | 成员管理、M03 及 M04 回复/备注/附件写操作 | `"<version>"`，如 `"3"`；见乐观版本与幂等键 |
+| Idempotency-Key | 成员管理、M02 创建、M03 及 M04 回复/备注/附件写操作 | UUID；见乐观版本与幂等键 |
 | X-Request-ID | 可选 | UUID；非法值被忽略 |
 
 ### 请求正文
@@ -73,7 +73,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 ### 成功响应
 
-统一结构（健康检查与 204 除外）：
+统一结构（健康检查、附件二进制下载与 204 除外）：
 
 ```json
 {
@@ -290,7 +290,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 流转、原因审计和成功幂等记录在同一事务提交；沿用 M01 成员控制锁，再锁成员行、工单行，使分派/认领与成员停用/降级串行，避免产生无效负责人。
 - 前端在详情页按角色、负责人及状态提供上述九个动作；分派/转派复用 GET /users/assignees。提交保留原始正文、版本和幂等键，结果不确定时锁定表单并重试原请求；版本/状态冲突展示后端错误并刷新详情，由用户重新确认，不自动以新版本提交。
 
-### M04 回复与附件（未实现）
+### M04 回复与附件（前后端已实现）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -298,14 +298,29 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | GET | /api/v1/tickets/{id}/replies | 查看公开回复（按角色过滤内部备注） | 同工单详情可见范围 |
 | POST | /api/v1/tickets/{id}/internal-notes | 添加仅工程师、管理员可见的内部备注 | 工程师、管理员 |
 | POST | /api/v1/tickets/{id}/attachments | 上传附件 | 提单人、工程师、管理员 |
+| GET | /api/v1/tickets/{id}/attachments | 分页读取可见附件 | 同工单详情可见范围 |
 | GET | /api/v1/attachments/{attachmentId} | 鉴权下载附件 | 工单可见者；内部附件仅工程师、管理员 |
 | GET | /api/v1/tickets/{id}/operations | 查看工单操作记录 | 同工单详情可见范围 |
 
 参数要点：
 
-- replies、internal-notes 正文含回复内容。
-- 附件上传使用 multipart/form-data，是通用 JSON 约定的例外；上传时选择可见性（公开或内部）。
-- 已关闭工单不能再追加回复与附件，引导用户新建单。
+- 本阶段细则已由用户确认。两个 POST 正文均为 `{"content":"回复内容"}`，content 必须为字符串，去首尾空白后非空，无额外字段长度限制；沿用 256 KiB JSON 总大小及未知字段拒绝规则。
+- 写请求必须携带 If-Match 和 UUID Idempotency-Key。成功 HTTP 200，data 为 `resourceId`（工单 ID）、`acceptedVersion`（工单新版本）、`replayed`，ETag 为受理版本；回复或备注每次成功均递增工单 version，不改变状态、负责人或轮次起点。
+- 沿用当前用户 + HTTP 方法及完整路径 + key 作用域、原始 DTO 及版本头摘要。同键同正文及原版本重放返回首次结果，带 `Idempotent-Replayed: true`，不重复写回复或审计；即使之后工单已关闭也可重放成功结果。同键异正文/版本返回 409 IDEMPOTENCY_CONFLICT，进行中返回 409 REQUEST_IN_PROGRESS。缺版本为 428 PRECONDITION_REQUIRED，非法版本/键为 400 VALIDATION_FAILED，旧版本为 409 VERSION_CONFLICT。
+- NEW、IN_PROGRESS、ON_HOLD、RESOLVED 均允许追加；CLOSED 返回 409 INVALID_STATE，提示新建工单。公开回复允许提单人、工程师、管理员；工程师、管理员可在全部可见工单追加，不限负责人。员工仅能回复本人提单，不能添加内部备注（403 FORBIDDEN）。回复、工单版本、审计、成功幂等结果同事务提交，回复与关闭通过同一工单行锁串行。
+- 两个 GET 均支持 Query `page`（默认 1，整数且 ≥1），固定 pageSize=20，按 createdAt、id 升序；data 为 `items`、`page`、`pageSize`、`total`。非法 page 为 400 INVALID_QUERY；超出末页返回空 items 与实际 total。GET 不更新工单、审计、幂等或会话活动时间。
+- GET replies 合并公开回复与内部备注，每项为 `id`、`content`、`visibility`（PUBLIC/INTERNAL）、`authorId`、`authorName`、`createdAt`。员工只收到 PUBLIC 项，分页和 total 均先过滤；工程师、管理员可读取全部。姓名来自当前成员姓名。
+- GET operations 返回已有 M03 流转及本阶段新增回复/备注动作，每项为 `id`、`action`、`actorId`、`actorName`、`createdAt`、`details`。action 沿用审计编码：TICKET_CLAIM、TICKET_ASSIGNMENTS、TICKET_TRANSFERS、TICKET_SUSPENSIONS、TICKET_RESUME、TICKET_RESOLUTIONS、TICKET_CLOSE、TICKET_REOPEN、TICKET_PRIORITY_CHANGES；新增 TICKET_REPLY、TICKET_INTERNAL_NOTE。不返回成员审计或未知类型审计。
+- 员工 operations 在查询时排除 TICKET_INTERNAL_NOTE。回复/备注的 details 只含 replyId，不复制正文；流转的 details 含 before/after，字段只允许 status、assigneeId、priority、summary（公开解决摘要）、closedAt、cycleStartedAt。仅工程师、管理员在流转 details 中可另读 reason；员工不收到原因、内部审计字段或原始审计载荷。
+- 不存在或员工不可见的工单统一 404 RESOURCE_NOT_FOUND；未登录/失效 401 SESSION_EXPIRED，CSRF 错误 403 CSRF_INVALID，其余沿用通用错误。本阶段不计算首次响应或 SLA，PRD Q01 留待 M07 确认。
+- 详情页接入回复/操作记录独立分页、公开回复及员工不可选的内部备注。正文按纯文本展示，内部备注明确标识；已关闭单展示限制与新建入口。发表成功刷新详情版本及记录，并显示最新页；结果不确定时保留原正文/路径/版本/幂等键、锁定表单重试，版本或状态冲突保留错误及正文并刷新详情，由用户重新确认。与 M03 写操作互相禁用，避免同页并行提交。
+- 附件细则已由用户确认。POST attachments 为 multipart/form-data，是 JSON 正文约定的例外；必须且仅提供一个文件 part `file` 和一个文本字段 `visibility`（PUBLIC/INTERNAL），重复/未知字段或多文件返回 400 VALIDATION_FAILED。单文件 1～10485760 字节（10 MiB，含上限），空文件 400、超限 413 REQUEST_TOO_LARGE；请求总大小额外允许 64 KiB 表单开销，其余 JSON 大小规则不变。不限制扩展名，不做预览或执行。
+- 附件上传需要 If-Match、Idempotency-Key，成功 HTTP 200，返回现有工单 `resourceId`、`acceptedVersion`、`replayed` 及 ETag；递增工单 version，不改变状态/负责人/轮次。幂等作用域同回复，请求摘要含原始文件名、SHA-256 内容哈希、visibility 及原版本。同键原文件/名称/可见性/原版本重放不重复写文件，即使之后已关闭也返回首次结果；任一项改变为 409 IDEMPOTENCY_CONFLICT。同键正在处理、版本缺失/非法/冲突沿用回复错误规则。
+- 上传状态与范围同公开回复；员工仅能给本人提单上传 PUBLIC，INTERNAL 为 403 FORBIDDEN。工程师、管理员可为全部可见工单上传公开或内部附件，不限负责人。CLOSED 禁止上传（409 INVALID_STATE），但保留已有附件下载能力。
+- GET attachments 使用 page（默认1，≥1整数）、固定 pageSize=20、createdAt/id 升序，返回 items/page/pageSize/total；每项为 id、fileName、size（字节）、visibility、uploaderId、uploaderName、createdAt。员工的内部项在查询和计数前排除；不返回路径、哈希或账号凭据。非法 page 为 400 INVALID_QUERY，不存在/不可见工单为 404 RESOURCE_NOT_FOUND。
+- 下载成功 HTTP 200，返回原文件二进制，不使用统一 JSON 成功包装；Content-Type=application/octet-stream，Content-Disposition=attachment（UTF-8 安全原名），Content-Length 为字节数，Cache-Control=no-store、X-Content-Type-Options=nosniff。员工只能下载本人提单的公开附件；内部附件对员工、他人工单附件对员工、不存在附件统一 404 RESOURCE_NOT_FOUND。失效会话 401，存储文件缺失/异常 503 DEPENDENCY_UNAVAILABLE，错误仍用统一 JSON。
+- 上传增加 TICKET_ATTACHMENT / TICKET_INTERNAL_ATTACHMENT 操作，details 只含 attachmentId、fileName、size；员工的内部上传操作在分页/计数前过滤。文件名仅用于安全处理后的下载/展示，物理文件用随机 UUID 保存。成功附件不自动清理；事务回滚清理本次文件，进程异常/提交结果未知的残留保留人工核对，不提供暂存或删除接口。
+- 前端附件区独立分页、按权限选择公开/内部、文件大小校验及鉴权下载；上传保留 File/FormData、可见性、原版本和幂等键以重试，提交中或结果不确定时锁定选择，版本/状态冲突保留文件及错误并刷新详情，等待用户确认。上传与回复/流转互相禁用；关闭后隐藏上传入口，已有可见附件仍可下载。
 
 ### M05 列表与检索（前后端已实现，暂不含 M07 SLA）
 
@@ -322,7 +337,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 非法 view/page/status、空白 businessType 或无效 q 返回 400 INVALID_QUERY；省略可选筛选即可，不传空字符串。UUID 路径格式非法返回 400 VALIDATION_FAILED。不存在或员工无权查看的详情统一返回 404 RESOURCE_NOT_FOUND；未登录返回 401 SESSION_EXPIRED，沿用统一错误结构。
 - 列表项与详情均返回：id、number、title、description、businessType、impactScope、requesterId、requesterName、assigneeId、assigneeName、status、priority、version、createdAt、resolutionSummary、closedAt、cycleStartedAt。未分派的 assigneeId/assigneeName 为 null；无解决摘要或关闭时间时相应字段为 null。不返回账号邮箱、密码、令牌或内部审计原因。
 - 员工只可读取本人提交的工单；工程师、管理员可读取全部工单详情。解决摘要按工单可见性公开展示。GET 不修改工单、不创建审计或幂等记录，也不延长会话。
-- 前端 `/tickets?view=…` 对接列表、筛选、搜索和分页，`/tickets/{id}` 展示真实详情及解决摘要并接入 M03 操作区；提单成功可进入详情。M04 回复/附件/操作记录未接入。
+- 前端 `/tickets?view=…` 对接列表、筛选、搜索和分页，`/tickets/{id}` 展示真实详情及解决摘要并接入 M03 操作区和 M04 回复/备注/附件/操作记录；提单成功可进入详情。
 - 按用户确认，本阶段不返回或显示 SLA 字段，不使用假指标；待 M07 实现后补齐原设计中的 SLA 数据。
 
 ### M06 邮件通知（账号邮件后台投递已接入；工单通知未实现）
