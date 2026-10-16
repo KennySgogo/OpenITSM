@@ -114,7 +114,6 @@ class M01IntegrationTest {
         clock.now = Instant.parse("2026-10-14T02:00:00Z");
         // Only this disposable container's test database is reset, never a configured user database.
         db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
-        db.execute("CREATE TABLE IF NOT EXISTS ticket (id uuid PRIMARY KEY, requester_id uuid, assignee_id uuid REFERENCES app_user(id), status text)");
         db.execute("TRUNCATE ticket");
         admin = bootstrap.initialize("Admin", "admin@example.com", password);
     }
@@ -170,9 +169,19 @@ class M01IntegrationTest {
             .header("If-Match", "\"" + version + "\"").header("Idempotency-Key", UUID.randomUUID()).content(body == null ? "" : body)).andReturn();
     }
 
+    @Test void allRolesCanReturnToCreateTicketAfterLogin() throws Exception {
+        active("employee-create@example.com", "EMPLOYEE");
+        active("engineer-create@example.com", "ENGINEER");
+        for (String email : List.of("admin@example.com", "employee-create@example.com", "engineer-create@example.com")) {
+            var result = login(anonymous(), email, password, "/tickets/new");
+            assertStatus(result, 200);
+            assertThat(data(result).get("redirectPath").asText()).isEqualTo("/tickets/new");
+        }
+    }
+
     @Test void databaseAndMigrationAreRealPostgres17() {
         assertThat(db.queryForObject("SHOW server_version", String.class)).startsWith("17.");
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(2);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(4);
         assertThat(db.queryForObject("SELECT count(*) FROM account_bootstrap", Integer.class)).isEqualTo(1);
         assertThatThrownBy(() -> bootstrap.initialize("Second", "second@example.com", password)).isInstanceOf(BusinessException.class).hasMessage("初始化入口已关闭");
     }
@@ -337,11 +346,67 @@ class M01IntegrationTest {
         assertThat(list.getResponse().getContentAsString()).doesNotContain("passwordHash", "failedCount", "token_hash");
     }
 
+    @Test void memberWritesValidateVersionsBeforeReplayAndRejectChangedBodies() throws Exception {
+        Browser browser = signed("admin@example.com");
+        for (String action : List.of("PATCH", "unlock", "invitation-resend", "disable")) {
+            UUID id = invite(browser, action.toLowerCase(Locale.ROOT) + "-contract@example.com", "EMPLOYEE");
+            if (action.equals("invitation-resend")) clock.advance(60);
+            String path = "/api/v1/users/" + id + (action.equals("PATCH") ? "" : "/" + action);
+            String body = switch (action) {
+                case "PATCH" -> "{\"name\":\"Changed\"}";
+                case "disable" -> "{\"reason\":\"Leaving company\"}";
+                default -> "";
+            };
+            UUID key = UUID.randomUUID();
+            var missing = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("Idempotency-Key", key).content(body)).andReturn();
+            assertStatus(missing, 428);
+            assertThat(code(missing)).isEqualTo("PRECONDITION_REQUIRED");
+            var stale = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("If-Match", "\"99\"").header("Idempotency-Key", key).content(body)).andReturn();
+            assertStatus(stale, 409);
+            assertThat(code(stale)).isEqualTo("VERSION_CONFLICT");
+            var first = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(body)).andReturn();
+            int success = action.equals("invitation-resend") ? 202 : 200;
+            assertStatus(first, success);
+            assertThat(data(first).get("acceptedVersion").asLong()).isEqualTo(1);
+            var replay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(body)).andReturn();
+            assertStatus(replay, success);
+            assertThat(replay.getResponse().getHeader("Idempotent-Replayed")).isEqualTo("true");
+            assertThat(data(replay).get("replayed").asBoolean()).isTrue();
+            var missingOnReplay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("Idempotency-Key", key).content(body)).andReturn();
+            assertStatus(missingOnReplay, 428);
+            assertThat(code(missingOnReplay)).isEqualTo("PRECONDITION_REQUIRED");
+            var malformedOnReplay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                .header("If-Match", "0").header("Idempotency-Key", key).content(body)).andReturn();
+            assertStatus(malformedOnReplay, 400);
+            assertThat(code(malformedOnReplay)).isEqualTo("VALIDATION_FAILED");
+            if (!body.isEmpty()) {
+                String changed = body.replace("Changed", "Different").replace("Leaving company", "Different reason");
+                var conflict = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
+                    .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(changed)).andReturn();
+                assertStatus(conflict, 409);
+                assertThat(code(conflict)).isEqualTo("IDEMPOTENCY_CONFLICT");
+            }
+            assertThat(users.selectById(id).version).isEqualTo(1);
+            assertThat(db.queryForObject("SELECT count(*) FROM audit_event WHERE object_id=?", Integer.class, id)).isEqualTo(2);
+            assertThat(db.queryForObject("SELECT count(*) FROM notification_task WHERE recipient_id=?", Integer.class, id))
+                .isEqualTo(action.equals("invitation-resend") ? 2 : 1);
+            assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record WHERE resource_id=?", Integer.class, id)).isEqualTo(2);
+            if (action.equals("PATCH")) assertThat(users.selectById(id).name).isEqualTo("Changed");
+            if (action.equals("disable")) assertThat(db.queryForObject(
+                "SELECT reason FROM audit_event WHERE object_id=? AND action='MEMBER_DISABLE'", String.class, id)).isEqualTo("Leaving company");
+        }
+    }
+
     @Test void lastAdminHandoffDisableRoleRevocationAndUnlock() throws Exception {
         Browser browser = signed("admin@example.com");
         assertStatus(memberAction(browser, admin, "disable", 0, "{\"reason\":\"Leaving company\"}"), 409);
         UUID engineer = active("engineer@example.com", "ENGINEER"); Browser engineerBrowser = signed("engineer@example.com");
-        db.update("INSERT INTO ticket VALUES (?,?,?,'RESOLVED')", UUID.randomUUID(), admin, engineer);
+        db.update("INSERT INTO ticket (id,requester_id,assignee_id,status,title,description,business_type,impact_scope) VALUES (?,?,?,'RESOLVED','Test','Test','Test','Test')", UUID.randomUUID(), admin, engineer);
         var blocked = memberAction(browser, engineer, "disable", 0, "{\"reason\":\"Leaving company\"}");
         assertStatus(blocked, 409); assertThat(code(blocked)).isEqualTo("MEMBER_HAS_OPEN_TICKETS");
         assertThat(blocked.getResponse().getContentAsString()).contains("1");
@@ -409,8 +474,8 @@ class M01IntegrationTest {
     @Test void legitimateOriginalTicketPageIsCheckedAgainstCurrentVisibility() throws Exception {
         UUID employee = active("employee@example.com", "EMPLOYEE");
         UUID ownTicket = UUID.randomUUID(); UUID otherTicket = UUID.randomUUID();
-        db.update("INSERT INTO ticket VALUES (?,?,NULL,'NEW')", ownTicket, employee);
-        db.update("INSERT INTO ticket VALUES (?,?,NULL,'NEW')", otherTicket, admin);
+        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope) VALUES (?,?,'Test','Test','Test','Test')", ownTicket, employee);
+        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope) VALUES (?,?,'Test','Test','Test','Test')", otherTicket, admin);
         var own = login(anonymous(), "employee@example.com", password, "/tickets/" + ownTicket);
         assertStatus(own, 200); assertThat(data(own).get("redirectPath").asText()).isEqualTo("/tickets/" + ownTicket);
         var other = login(anonymous(), "employee@example.com", password, "/tickets/" + otherTicket);
@@ -469,7 +534,7 @@ class M01IntegrationTest {
             try (var lock = connection.prepareStatement("SELECT id FROM app_user WHERE id=? FOR UPDATE")) {
                 lock.setObject(1, engineer); lock.execute();
             }
-            try (var insert = connection.prepareStatement("INSERT INTO ticket VALUES (?,?,?,'NEW')")) {
+            try (var insert = connection.prepareStatement("INSERT INTO ticket (id,requester_id,assignee_id,title,description,business_type,impact_scope) VALUES (?,?,?,'Test','Test','Test','Test')")) {
                 insert.setObject(1, UUID.randomUUID()); insert.setObject(2, admin); insert.setObject(3, engineer); insert.execute();
             }
             var pending = pool.submit(() -> memberAction(browser, engineer, "disable", 0, "{\"reason\":\"Leaving company\"}"));
@@ -493,7 +558,7 @@ class M01IntegrationTest {
         var flyway = org.flywaydb.core.Flyway.configure().dataSource(db.getDataSource()).load();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(2);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(4);
     }
 
     @Test void protocolErrorsAreClientErrorsAndIdempotencyCoversOriginalValues() throws Exception {

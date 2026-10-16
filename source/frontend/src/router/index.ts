@@ -2,6 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router';
 import AuthPage from '../views/AuthPage.vue';
 import ApplicationLayout from '../components/ApplicationLayout.vue';
 import MembersPage from '../views/MembersPage.vue';
+import CreateTicketPage from '../views/CreateTicketPage.vue';
+import TicketsPage from '../views/TicketsPage.vue';
+import TicketDetailPage from '../views/TicketDetailPage.vue';
 import PlaceholderPage from '../views/PlaceholderPage.vue';
 import { sessionState, sessionNotice, restoreSession, clearSession } from '../stores/SessionStore';
 import { setExpiredHandler, ApiError } from '../api/HttpClient';
@@ -14,8 +17,9 @@ export const router = createRouter({
       path: '/', component: ApplicationLayout, children: [
         { path: '', component: PlaceholderPage, meta: { title: '工作台' } },
         { path: 'admin/users', component: MembersPage, meta: { title: '成员管理' } },
-        { path: 'tickets', component: PlaceholderPage, meta: { title: '工单' } },
-        { path: 'tickets/:id', component: PlaceholderPage, meta: { title: '工单详情' } },
+        { path: 'tickets', component: TicketsPage, meta: { title: '工单' } },
+        { path: 'tickets/new', component: CreateTicketPage, meta: { title: '提交工单' } },
+        { path: 'tickets/:id', component: TicketDetailPage, meta: { title: '工单详情' } },
         { path: 'dashboard', component: PlaceholderPage, meta: { title: '服务看板' } },
         { path: 'knowledge', component: PlaceholderPage, meta: { title: '知识库' } },
         { path: 'settings', component: PlaceholderPage, meta: { title: '团队配置' } },

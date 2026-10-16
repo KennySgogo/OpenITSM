@@ -29,5 +29,31 @@ export interface MemberAction {
   replayed: boolean;
 }
 export interface FieldError { field: string; code: string; message: string }
+export interface CreateTicketRequest {
+  title: string;
+  description: string;
+  businessType: string;
+  impactScope: string;
+}
+export interface CreatedTicket {
+  id: string;
+  number: string;
+  replayed: boolean;
+}
+export type TicketView = 'MINE' | 'ASSIGNED' | 'UNASSIGNED' | 'ALL';
+export type TicketStatus = 'NEW' | 'IN_PROGRESS' | 'ON_HOLD' | 'RESOLVED' | 'CLOSED';
+export interface Ticket {
+  id: string; number: string; title: string; description: string;
+  businessType: string; impactScope: string;
+  requesterId: string; requesterName: string;
+  assigneeId: string | null; assigneeName: string | null;
+  status: TicketStatus; priority: 'P1' | 'P2' | 'P3' | 'P4'; version: number;
+  createdAt: string; resolutionSummary: string | null; closedAt: string | null; cycleStartedAt: string;
+}
+export interface TicketPage { items: Ticket[]; page: number; pageSize: number; total: number }
+export interface TicketAction { resourceId: string; acceptedVersion: number; replayed: boolean }
+export interface Assignee { id: string; name: string; unresolvedCount: number; pendingConfirmationCount: number }
+export const ticketViewLabels: Record<TicketView, string> = { MINE: '我的工单', ASSIGNED: '我的待办', UNASSIGNED: '未分派队列', ALL: '全部工单' };
+export const ticketStatusLabels: Record<TicketStatus, string> = { NEW: '新建', IN_PROGRESS: '处理中', ON_HOLD: '已挂起', RESOLVED: '已解决', CLOSED: '已关闭' };
 export const roleLabels: Record<Role, string> = { EMPLOYEE: '员工', ENGINEER: '工程师', ADMIN: '管理员' };
 export const statusLabels: Record<MemberStatus, string> = { INVITED: '待激活', ACTIVE: '在职', DISABLED: '已停用' };

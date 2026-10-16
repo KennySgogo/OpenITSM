@@ -3,6 +3,7 @@ package com.openitsm;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openitsm.service.BootstrapService;
+import org.springframework.jdbc.core.JdbcTemplate;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.URI;
@@ -32,6 +33,7 @@ class M01FrontendHttpTest {
     @LocalServerPort int port;
     @Autowired BootstrapService bootstrap;
     @Autowired ObjectMapper json;
+    @Autowired JdbcTemplate db;
     String csrf;
     HttpClient client = HttpClient.newBuilder()
         .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
@@ -49,8 +51,24 @@ class M01FrontendHttpTest {
     }
     JsonNode data(HttpResponse<String> response) throws Exception { return json.readTree(response.body()).get("data"); }
 
+    void assertError(HttpResponse<String> response, int status, String code) throws Exception {
+        assertThat(response.statusCode()).isEqualTo(status);
+        var body = json.readTree(response.body());
+        assertThat(body.path("error").path("code").asText()).isEqualTo(code);
+        assertThat(body.path("error").path("message").asText()).isNotBlank();
+        assertThat(body.path("error").path("fieldErrors").isArray()).isTrue();
+        assertThat(body.path("error").path("retryable").asBoolean()).isFalse();
+        assertThat(body.path("requestId").asText()).isEqualTo(response.headers().firstValue("X-Request-ID").orElseThrow());
+    }
+
     @Test
     void frontendContractWorksOverRealHttp() throws Exception {
+        for (String health : new String[]{"live", "ready"}) {
+            var response = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/health/" + health))
+                .timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(200);
+            assertThat(json.readTree(response.body()).path("status").asText()).isEqualTo("UP");
+        }
         // The database belongs exclusively to this test container, never the normal local database.
         bootstrap.initialize("Frontend HTTP Admin", "frontend-http@example.com", "TestPassword1234");
         csrf = data(call("GET", "/auth/csrf", null, null, null)).get("csrfToken").asText();
@@ -70,10 +88,24 @@ class M01FrontendHttpTest {
         var invite = call("POST", "/users", invitation, key, null);
         assertThat(invite.statusCode()).isEqualTo(201);
         assertThat(data(call("POST", "/users", invitation, key, null)).get("replayed").asBoolean()).isTrue();
+        assertError(call("POST", "/users", invitation.replace("HTTP Member", "Other Member"), key, null), 409, "IDEMPOTENCY_CONFLICT");
         String id = data(invite).get("resourceId").asText();
         long version = data(invite).get("acceptedVersion").asLong();
-        var update = call("PATCH", "/users/" + id, "{\"name\":\"Updated HTTP Member\"}", UUID.randomUUID().toString(), version);
+        String updateBody = "{\"name\":\"Updated HTTP Member\"}";
+        String updateKey = UUID.randomUUID().toString();
+        assertError(call("PATCH", "/users/" + id, updateBody, updateKey, null), 428, "PRECONDITION_REQUIRED");
+        var update = call("PATCH", "/users/" + id, updateBody, updateKey, version);
         assertThat(update.statusCode()).isEqualTo(200);
+        var replay = call("PATCH", "/users/" + id, updateBody, updateKey, version);
+        assertThat(replay.statusCode()).isEqualTo(200);
+        assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
+        assertThat(data(replay).get("replayed").asBoolean()).isTrue();
+        assertError(call("PATCH", "/users/" + id, updateBody, updateKey, null), 428, "PRECONDITION_REQUIRED");
+        assertError(call("PATCH", "/users/" + id, "{\"name\":\"Different Member\"}", updateKey, version), 409, "IDEMPOTENCY_CONFLICT");
+        assertThat(db.queryForObject("SELECT name FROM app_user WHERE id=?", String.class, UUID.fromString(id))).isEqualTo("Updated HTTP Member");
+        assertThat(db.queryForObject("SELECT version FROM app_user WHERE id=?", Long.class, UUID.fromString(id))).isEqualTo(version + 1);
+        assertThat(db.queryForObject("SELECT count(*) FROM audit_event WHERE object_id=?", Integer.class, UUID.fromString(id))).isEqualTo(2);
+        assertThat(db.queryForObject("SELECT count(*) FROM notification_task WHERE recipient_id=?", Integer.class, UUID.fromString(id))).isEqualTo(1);
         var conflict = call("PATCH", "/users/" + id, "{\"name\":\"Stale HTTP Member\"}", UUID.randomUUID().toString(), version);
         assertThat(conflict.statusCode()).isEqualTo(409);
         assertThat(conflict.body()).contains("VERSION_CONFLICT");
@@ -86,7 +118,7 @@ class M01FrontendHttpTest {
         var expired = call("GET", "/auth/me", null, null, null);
         assertThat(expired.statusCode()).isEqualTo(401);
         assertThat(expired.body()).contains("SESSION_EXPIRED");
-        System.out.println("PASS real HTTP: invalid login, login redirectPath, me, member list/lockedUntil, invitation/idempotent replay, stale version 409, uniform password reset message, logout and expired session 401");
+        System.out.println("PASS real HTTP: live/ready UP, invalid login, login redirectPath, me, member list/lockedUntil, invitation/body conflict, If-Match 428, matching version, idempotent replay/body conflict without duplicate writes, stale version 409, uniform password reset message, logout and expired session 401");
         // Opt-in local browser QA; never enabled in normal verify runs. Contains only test accounts.
         String hold = System.getenv("OPENITSM_FRONTEND_BROWSER_HOLD_SECONDS");
         if (hold != null) {

@@ -100,6 +100,7 @@ public class UserServiceImpl implements UserService {
     @Transactional
     public ActionVO change(AuthContext ctx, UUID id, String action, UpdateUserRequest patch, String reason,
         String versionHeader, String keyHeader, UUID requestId) {
+        long expectedVersion = Values.version(versionHeader);
         UUID key = idem.key(keyHeader);
         String operation = (action.equals("PATCH") ? "PATCH " : "POST ") + "/api/v1/users/" + id + (action.equals("PATCH") ? "" : "/" + action);
         String hash = idem.hash(patch == null ? reason : patch, versionHeader);
@@ -109,7 +110,7 @@ public class UserServiceImpl implements UserService {
         if (user == null) throw new BusinessException(404, "RESOURCE_NOT_FOUND", "资源不存在或不可访问");
         var previous = idem.replay(actor.id, operation, key, hash);
         if (previous != null) return previous;
-        if (user.version != Values.version(versionHeader)) throw new BusinessException(409, "VERSION_CONFLICT", "成员已更新，请刷新后重试");
+        if (user.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "成员已更新，请刷新后重试");
         var changes = new LinkedHashMap<String, Object>();
         switch (action) {
             case "PATCH" -> {

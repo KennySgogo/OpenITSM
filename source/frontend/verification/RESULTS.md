@@ -1,4 +1,36 @@
-# M01 验证记录
+# 前端验证记录
+
+## M03 前端验收（2026-10-16，Asia/Ulaanbaatar）
+
+- 类型检查通过；Vite 构建成功，1645 模块，保留既有主包 >500 KB 告警。`npm test`：12 项通过，新增角色/负责人/状态权限及关闭后七天含边界、超界和无关闭时间测试。
+- `mvn -o -B verify`：86 项、0 失败/错误/跳过，BUILD SUCCESS；包括 M01/M02/M03/M05 回归。日志 `source/backend/target/m03-frontend-verify.log`。后端业务、接口及数据库迁移未修改；测试夹具可选保留上限从 120 秒调为 600 秒供浏览器联调，默认不等待。
+- 最终打包应用实际启动 `OpenItsmApplication`，local、18086、Flyway V4，live/ready 均 HTTP 200 UP；Vite 5176 对接本次 Testcontainers PostgreSQL 17.11。启动日志 `source/backend/target/m03-frontend-app.log`、`m03-frontend-app-restart.log`。未接触业务库、`.env` 或既有前端服务，关闭自动发信。
+- 浏览器由员工真实提单进入详情，NEW 状态无处理操作；管理员分派、填写原因调整 P2；两个页面保留同一版本，其中一个更新成功，另一页面提交返回“工单已更新，请刷新后重试”，提示在刷新详情后仍保留，无自动重提。
+- 工程师受理已分派单、填原因挂起、恢复、转派；转派候选排除当前负责人，转派后原负责人无处理入口。新负责人填写公开摘要解决工单，代关闭需原因；提单人确认关闭可无正文，且可填写原因重开。九个流转接口均由浏览器实际调用成功。
+- 关闭弹窗保留已填原因后停止本次后端，提交显示真实代理错误，表单锁定并提供“重试原操作”；恢复同一隔离库的后端后重试成功。数据库最终工单 ITSM-20：IN_PROGRESS、P2、version=13，13 条流转审计、14 条成功幂等记录（含提单）。两次实际关闭各产生一次审计；版本冲突和断连未造成重复流转。证据 `source/backend/target/m03-frontend-db-check.log`。
+- 截图：[流转操作](./m03-actions.jpg)、[版本冲突](./m03-conflict.jpg)。未在浏览器等待七天或重复全部 M01 页面；期限边界由权限测试及已有后端可控时钟测试验证。M04 回复附件、M07 SLA 均未扩展。
+- 验收后主动停止本次临时 JAR/Vite 和处于可选保留阶段的测试夹具进程；该夹具命令因主动中止未生成最终完成报告，测试结论以已完整结束的 `mvn verify` 为准。
+
+## M05 前后端验收（2026-10-16，Asia/Ulaanbaatar）
+
+- `npm exec vue-tsc -- --noEmit`：退出 0；`npm exec vite -- build`：成功，1641 模块，保留主包 >500 KB 告警；`npm test`：现有 9 项通过。
+- 后端 `mvn -o -B verify`：86 项、0 失败/错误/跳过，BUILD SUCCESS。新增 5 项 M05 真实 HTTP 测试验证四视图权限、分页排序、组合检索、通配符字面匹配、非法参数、详情可见性与读取无副作用；全部 M01/M02/M03 回归通过。日志 `source/backend/target/m05-verify.log`。
+- 最终 JAR 以 local profile 在独立 18085 启动，Flyway V4、临时 Vite 5175，连接 Testcontainers PostgreSQL 17.11。使用测试初始化账号和真实落库工单，未连接业务库、未发真实邮件、未修改 `.env` 或原有 5173 服务。启动日志 `source/backend/target/m05-packaged-app.log`。
+- 浏览器员工列表共 23 条：第一页 20 条、第二页 3 条；搜索 VPN 返回 1 条并重置页码，点击编号进入详情。提单人姓名、无负责人、公开解决摘要正确；描述中的 `<script>` 按文本显示。
+- 浏览器工程师默认我的待办 1 条，未分派队列 24 条，全部工单 25 条；组合设置 OUTAGE、处理中、Network 后返回唯一匹配工单，显示真实提单人和负责人。未在浏览器逐页回归 M01，已有模块接口由完整后端测试回归。
+- 截图：[组合检索列表](./m05-list.jpg)、[只读详情](./m05-detail.jpg)。本次按授权不返回 SLA、不开发 M03 操作区或 M04 回复附件。
+- 验收后测试夹具按 300 秒保留期自动结束（5 项测试再次通过），停止本次临时 JAR/Vite。收尾时 live 返回 UP；ready 探测发生在隔离数据库清理后，返回 DOWN，未将其记为通过。此前浏览器实际读取均在数据库存活期间完成。
+
+## M02 前端验收（2026-10-16，Asia/Ulaanbaatar）
+
+- `npm exec vue-tsc -- --noEmit`：退出 0；`npm exec vite -- build`：成功，1635 模块，保留主包 >500 KB 告警；`npm test`：现有 9 项全部通过。首次构建受沙箱 realpath EPERM 限制，改为获准的正常权限执行后通过。
+- 后端 `mvn -o -B verify`：70 项、0 失败/错误/跳过，BUILD SUCCESS，包含三角色登录后返回 `/tickets/new` 回归；日志 `source/backend/target/m02-frontend-verify.log`。
+- 实际执行 `java -jar target/backend-0.1.0-SNAPSHOT.jar`，local profile、独立 18083 端口，连接本次 Testcontainers PostgreSQL 17.11，Flyway V3 成功；临时 Vite 使用 5174，Origin 匹配，自动发信关闭。未连接业务库、未改原 5173 服务。
+- 浏览器验证：匿名进入提单页需登录，登录返回提单页；空表单显示四项必填提示；管理员/员工/工程师均可经导航提交，显示真实编号与 UUID；继续提单后表单清空。
+- 真实断连验证：停止本次验收后端后提交，显示失败，四项内容保留并锁定，按钮为“重试提交”；重启同一隔离库后端后重试成功。最终数据库只读核对 ADMIN/EMPLOYEE/ENGINEER 分别生成 ITSM-1/2/3，共 3 张工单和 3 条提单幂等记录，无重复建单。
+- 截图：[提单成功](./m02-created.jpg)。未做本次 M01 全页面浏览器回归；M01 接口由完整后端测试及既有前端测试回归。列表、详情、附件与 M03 均不在本次实现范围。
+
+## M01 历史记录
 
 日期：2026-10-15（Asia/Shanghai）。记录实际执行，不把模拟响应或未执行项目作为真实联调。
 

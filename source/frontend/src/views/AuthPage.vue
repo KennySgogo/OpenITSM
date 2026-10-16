@@ -78,7 +78,7 @@ async function submit() {
         <template v-if="!success">
           <div v-if="!login" class="auth-symbol">{{ forgot ? '✉' : activation ? '✓' : '⌑' }}</div>
           <div class="auth-heading"><h1>{{ title }}</h1><p>{{ subtitle }}</p></div>
-          <ErrorNotice :error="error || sessionNotice" />
+          <ErrorNotice :error="error || sessionNotice" :show-request-id="!login" />
           <ElAlert v-if="tokenMissing" title="链接缺少有效令牌，请从邮件中的完整链接进入。" type="warning" :closable="false" show-icon />
           <ElForm ref="form" :model="model" :rules="rules" label-position="top" @submit.prevent="submit">
             <ElFormItem v-if="login || forgot" label="邮箱地址" prop="email"><ElInput v-model="model.email" placeholder="you@company.com" autocomplete="username" :maxlength="254" /></ElFormItem>

@@ -1,4 +1,4 @@
-# M01 backend
+# M01 / M02 / M03 backend
 
 Java 21 / Maven 3.9.16。需求与接口以仓库 PRD.md 和 ARCHITECTURE.md 为准，当前进度与已知问题见 STATUS.md。
 
@@ -76,6 +76,14 @@ AccountMailDispatchTest 使用独立 PostgreSQL 测试库、本地 SMTP 和可�
 
 ## 后续模块边界
 
-M02 建立 ticket 表后，`TicketMapper` 自动检查 status != CLOSED 的全部名下工单，包括 RESOLVED。工单表尚不存在时计数为零；若已有表结构不兼容则报错，不能降级为零。M03 的分派/交接事务必须先锁定目标 app_user 并核对 ACTIVE ENGINEER，再修改 ticket；与停用/降级共享成员行锁。M01 尚不提供工单转派/HANDOVER 接口，相关端到端验收待 M03。
+M02 已通过 V3 建立 ticket 表及编号序列。`POST /api/v1/tickets` 使用现有登录 Cookie、Origin、CSRF 和 Idempotency-Key，创建不需 If-Match；请求/响应见根目录 API.md。M02HttpTest 通过真实 HTTP 和隔离 PostgreSQL 验证提单、校验、幂等、并发及健康状态，前端已接入提单页面。
+
+M03 后端提供认领/受理、分派、转派、挂起、恢复、解决、关闭、重开和调整优先级，均需当前工单 If-Match 与 Idempotency-Key。V4 增加优先级（新旧工单默认 P3）、解决摘要、关闭时间及轮次起点，未修改 V1～V3。重开清空关闭时间并重置轮次起点，保留有效负责人，原负责人已停用或降级时清空，由管理员后续分派；尚不计算 M07 SLA。
+
+`TicketMapper` 检查 status != CLOSED 的全部名下工单，包括 RESOLVED；M03 沿用 M01 的成员控制锁，再锁成员行与工单行，分派前核对 ACTIVE ENGINEER，避免与停用/降级竞争产生无效负责人。工单变更、原因审计和成功幂等记录使用同一事务。M03HttpTest 使用真实 HTTP、隔离 PostgreSQL 和可控时钟覆盖九个动作、权限、幂等、并发、七天边界、回滚与 V3 升级；不发真实邮件。
+
+M03 前端已通过 M05 详情接入九个流转动作，未扩展 M04。测试可显式设置 `OPENITSM_M03_HOLD_SECONDS`（最多 600 秒），在 M03HttpTest 结束后短暂保留隔离数据库，供独立打包应用联调；默认不等待。
+
+M05 提供 `GET /api/v1/tickets` 与 `GET /api/v1/tickets/{id}`，复用现有工单表，无新增迁移。四个视图、固定 20 条分页、精确筛选、关键词字面子串检索及权限规则见 API.md；返回真实姓名和版本，不返回敏感账号字段或尚未实现的 SLA。M05HttpTest 通过真实 HTTP 和 PostgreSQL 验证查询、权限和无写入副作用；`OPENITSM_M05_HOLD_SECONDS` 可在测试结束后保留隔离夹具最多 300 秒供浏览器联调，默认不等待。
 
 开发 OpenAPI 只在 local profile 开启；/health/live、/health/ready 只允许 loopback。当前 readiness 验证数据库可查询；附件卷检查随 M04 接入。无 CI、容器发布或生产部署改动。

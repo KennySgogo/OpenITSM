@@ -1,4 +1,4 @@
-# M01 前端
+# M01 / M02 / M03 / M05 前端
 
 Vue 3 + TypeScript + Vite + Element Plus。Vue Router 管理导航；Vue 响应式状态保存内存会话；原生 fetch 统一处理请求。没有其他运行时 UI 依赖。工程配置参考 [Vite 官方指南](https://vite.dev/guide/)。
 
@@ -11,7 +11,7 @@ npm test
 npm exec vite
 ```
 
-开发地址为 http://localhost:5173，必须使用 localhost 保持 Origin 与后端 local 配置一致。后端本次实际启动在 8080。目标地址集中在 `BackendConfig.ts`；需要换端口时，在启动 Vite 的进程设置 `OPENITSM_BACKEND_URL`，不要修改 `.env`。
+默认开发地址为 http://localhost:5173，必须使用 localhost 保持 Origin 与后端 local 配置一致，默认代理后端 8080。目标地址集中在 `BackendConfig.ts`；需要换端口时，在启动 Vite 的进程设置 `OPENITSM_BACKEND_URL`，不要修改 `.env`。实际运行端口以启动输出为准。
 
 Vite 将 `/api` 同源代理到后端，保留浏览器 Origin 和 Cookie。不手动设置浏览器禁止脚本设置的 Origin 请求头，不使用跨站 Cookie，也不需要放宽后端 CORS。生产需由同源反向代理转发 `/api`，并对页面路径配置 SPA history fallback；本次未修改生产部署。
 
@@ -19,7 +19,7 @@ Vite 将 `/api` 同源代理到后端，保留浏览器 Origin 和 Cookie。不�
 
 - [设计说明](./M01-design.md)：路由、页面、接口、错误处理四张表及差异。
 - [验证记录](./verification/RESULTS.md)：实际执行结果与未联调项。
-- `src/views/`：AuthPage（四条认证路由）、MembersPage、PlaceholderPage。
+- `src/views/`：AuthPage（四条认证路由）、MembersPage、CreateTicketPage、TicketsPage、TicketDetailPage、PlaceholderPage。
 - `src/components/`：品牌、统一错误展示、应用导航壳。
 - `src/api/HttpClient.ts`：Cookie、CSRF、错误解析、幂等处理中的有限重试和限流截止时间。
 - `src/stores/SessionStore.ts`：会话恢复、实际交互跟踪、60 秒心跳和 401 清理。
@@ -32,3 +32,21 @@ Vite 将 `/api` 同源代理到后端，保留浏览器 Origin 和 Cookie。不�
 会话、CSRF、密码与邮件 token 均不持久化到 localStorage/sessionStorage。邮件链接为 `/activate?token=…`、`/reset-password?token=…`。页面使用 no-referrer，避免 token 通过引用来源头传播；不加载远程图片、字体或分析脚本。
 
 本地数据库不提供默认前端登录账号。联调测试账号仅在隔离 Testcontainers 数据库中由测试初始化，不可当作本地业务库凭据使用。正常账号由既有后端 bootstrap 或管理员邀请建立。
+
+## M02 提单
+
+三角色均可从导航进入 `/tickets/new`。标题、描述、业务类型、影响范围为必填自由文本，调用 `POST /api/v1/tickets`，只附幂等键，不带 If-Match；成功展示真实编号与 ID，可进入详情。“继续提单”清空内容并开始新操作。网络/服务异常导致结果不确定时，保留原内容与幂等键并锁定表单，使用“重试提交”确认原请求；未增加本地持久化。
+
+页面沿用既有桌面布局（最小宽度 1100px）。本次浏览器验收使用临时 5174/18083 端口及隔离数据库，后端 Origin 同步设置为 `http://localhost:5174`；正常开发仍按上述默认端口启动。验收结果见 [验证记录](./verification/RESULTS.md)。
+
+## M05 列表、详情与检索
+
+`/tickets` 提供我的工单；工程师和管理员另有我的待办、未分派、全部工单。对接真实 GET 接口，固定每页 20 条，状态、业务类型、关键词可组合筛选，查询条件与页码保留在 URL。`/tickets/:id` 显示真实工单信息和公开解决摘要，文本按普通文本渲染。失败可重试，空列表显示空状态。
+
+暂不展示 SLA，不包含 M04 回复、内部备注与附件。M05 浏览器验收使用临时 5175/18085 及隔离数据库，未改变默认开发配置。
+
+## M03 工单操作
+
+详情页的 `TicketActions.vue` 对接九个既有流转接口。`TicketPolicy.ts` 依据角色、负责人、状态和重开期限控制入口，最终权限由后端校验。分派/转派读取现有工程师候选及负载，原因和公开解决摘要按接口要求校验。
+
+提交携带当前版本和独立幂等键；结果不确定时保留原正文、版本及键，锁定表单并提供“重试原操作”。版本或状态冲突显示后端提示、刷新详情，由用户重新确认操作。M03 浏览器验收使用临时 5176/18086 和隔离数据库；默认开发端口不变。
