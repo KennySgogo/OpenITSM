@@ -42,6 +42,11 @@ export interface CreatedTicket {
 }
 export type TicketView = 'MINE' | 'ASSIGNED' | 'UNASSIGNED' | 'ALL';
 export type TicketStatus = 'NEW' | 'IN_PROGRESS' | 'ON_HOLD' | 'RESOLVED' | 'CLOSED';
+export interface TicketSla {
+  responseDueAt: string; resolutionDueAt: string;
+  firstRespondedAt: string | null; resolvedAt: string | null;
+  responseOverdue: boolean; resolutionOverdue: boolean;
+}
 export interface Ticket {
   id: string; number: string; title: string; description: string;
   businessType: string; impactScope: string;
@@ -49,6 +54,7 @@ export interface Ticket {
   assigneeId: string | null; assigneeName: string | null;
   status: TicketStatus; priority: 'P1' | 'P2' | 'P3' | 'P4'; version: number;
   createdAt: string; resolutionSummary: string | null; closedAt: string | null; cycleStartedAt: string;
+  sla: TicketSla | null;
 }
 export interface TicketPage { items: Ticket[]; page: number; pageSize: number; total: number }
 export interface TicketAction { resourceId: string; acceptedVersion: number; replayed: boolean }

@@ -181,7 +181,7 @@ class M01IntegrationTest {
 
     @Test void databaseAndMigrationAreRealPostgres17() {
         assertThat(db.queryForObject("SHOW server_version", String.class)).startsWith("17.");
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(6);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(7);
         assertThat(db.queryForObject("SELECT count(*) FROM account_bootstrap", Integer.class)).isEqualTo(1);
         assertThatThrownBy(() -> bootstrap.initialize("Second", "second@example.com", password)).isInstanceOf(BusinessException.class).hasMessage("初始化入口已关闭");
     }
@@ -558,7 +558,7 @@ class M01IntegrationTest {
         var flyway = org.flywaydb.core.Flyway.configure().dataSource(db.getDataSource()).load();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(6);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(7);
     }
 
     @Test void protocolErrorsAreClientErrorsAndIdempotencyCoversOriginalValues() throws Exception {

@@ -183,7 +183,8 @@ class M05HttpTest {
         var resolved = call(employee, "GET", "/api/v1/tickets/" + mine.get(1), null);
         assertThat(data(resolved).path("resolutionSummary").asText()).isEqualTo("Public network solution");
         assertThat(data(resolved).path("assigneeId").isNull()).isTrue();
-        assertThat(response.body()).doesNotContain("password", "csrf", "authVersion", "email", "sla");
+        assertThat(response.body()).doesNotContain("password", "csrf", "authVersion", "email");
+        assertThat(value.path("sla").isObject()).isTrue();
         assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record", Long.class)).isEqualTo(before);
         assertThat(db.queryForObject("SELECT count(*) FROM audit_event", Long.class)).isEqualTo(auditsBefore);
         error(call(new Browser(HttpClient.newHttpClient(), null), "GET", "/api/v1/tickets", null), 401, "SESSION_EXPIRED");

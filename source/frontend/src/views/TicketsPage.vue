@@ -2,6 +2,7 @@
 import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorNotice from '../components/ErrorNotice.vue';
+import TicketSla from '../components/TicketSla.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels, ticketViewLabels } from '../types/ApiTypes';
@@ -69,6 +70,7 @@ function changePage(page: number) { void router.push({ path: '/tickets', query: 
       <ElTableColumn prop="title" label="标题" min-width="230" show-overflow-tooltip />
       <ElTableColumn label="状态" width="105"><template #default="{ row }">{{ ticketStatusLabels[row.status as keyof typeof ticketStatusLabels] }}</template></ElTableColumn>
       <ElTableColumn prop="priority" label="优先级" width="85" />
+      <ElTableColumn label="处理时限" min-width="185"><template #default="{ row }"><TicketSla :sla="row.sla" compact /></template></ElTableColumn>
       <ElTableColumn prop="businessType" label="业务类型" min-width="120" show-overflow-tooltip />
       <ElTableColumn prop="requesterName" label="提单人" min-width="100" />
       <ElTableColumn label="负责人" min-width="100"><template #default="{ row }">{{ row.assigneeName ?? '未分派' }}</template></ElTableColumn>

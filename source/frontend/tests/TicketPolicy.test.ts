@@ -7,7 +7,7 @@ const ticket: Ticket = {
   id: 'ticket', number: 'ITSM-1', title: 'Issue', description: 'Description', businessType: 'IT', impactScope: 'Team',
   requesterId: 'employee', requesterName: 'Employee', assigneeId: null, assigneeName: null,
   status: 'NEW', priority: 'P3', version: 0, createdAt: '2026-10-16T00:00:00Z',
-  resolutionSummary: null, closedAt: null, cycleStartedAt: '2026-10-16T00:00:00Z'
+  resolutionSummary: null, closedAt: null, cycleStartedAt: '2026-10-16T00:00:00Z', sla: null
 };
 const engineer = { id: 'engineer', role: 'ENGINEER' as const };
 const employee = { id: 'employee', role: 'EMPLOYEE' as const };

@@ -20,6 +20,7 @@ import com.openitsm.vo.CreatedTicketVO;
 import com.openitsm.vo.ActionVO;
 import com.openitsm.vo.TicketPageVO;
 import com.openitsm.vo.TicketVO;
+import com.openitsm.vo.TicketSlaVO;
 import com.openitsm.entity.UserEntity;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import java.util.List;
@@ -27,6 +28,7 @@ import java.util.HashSet;
 import java.util.stream.Collectors;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.Set;
@@ -90,8 +92,26 @@ public class TicketServiceImpl implements TicketService {
         }
         var names = users.selectList(new QueryWrapper<UserEntity>().in("id", ids)).stream()
             .collect(Collectors.toMap(user -> user.id, user -> user.name));
+        Instant now = clock.instant();
         return records.stream().map(ticket -> TicketVO.from(ticket, names.get(ticket.requesterId),
-            ticket.assigneeId == null ? null : names.get(ticket.assigneeId))).toList();
+            ticket.assigneeId == null ? null : names.get(ticket.assigneeId), sla(ticket, now))).toList();
+    }
+
+    private TicketSlaVO sla(TicketEntity ticket, Instant now) {
+        if (!ticket.slaTracked) return null;
+        int responseMinutes = switch (ticket.priority) {
+            case "P1" -> 15; case "P2" -> 60; case "P3" -> 240; case "P4" -> 480;
+            default -> throw new IllegalStateException("Unknown ticket priority");
+        };
+        int resolutionHours = switch (ticket.priority) {
+            case "P1" -> 4; case "P2" -> 8; case "P3" -> 24; case "P4" -> 72;
+            default -> throw new IllegalStateException("Unknown ticket priority");
+        };
+        Instant responseDue = ticket.cycleStartedAt.plus(Duration.ofMinutes(responseMinutes));
+        Instant resolutionDue = ticket.cycleStartedAt.plus(Duration.ofHours(resolutionHours));
+        return new TicketSlaVO(responseDue, resolutionDue, ticket.firstRespondedAt, ticket.resolvedAt,
+            (ticket.firstRespondedAt == null ? now : ticket.firstRespondedAt).isAfter(responseDue),
+            (ticket.resolvedAt == null ? now : ticket.resolvedAt).isAfter(resolutionDue));
     }
 
     private BusinessException invalidQuery() { return new BusinessException(400, "INVALID_QUERY", "查询参数无效"); }
@@ -124,6 +144,7 @@ public class TicketServiceImpl implements TicketService {
         ticket.businessType = businessType; ticket.impactScope = impactScope;
         ticket.requesterId = actorId; ticket.status = "NEW"; ticket.createdAt = clock.instant();
         ticket.priority = "P3"; ticket.cycleStartedAt = ticket.createdAt;
+        ticket.slaTracked = true;
         tickets.insert(ticket);
         var accepted = idem.save(actorId, operation, key, hash, ticket.id, ticket.version, 201);
         sessions.touch(context.session().hash());
@@ -188,6 +209,7 @@ public class TicketServiceImpl implements TicketService {
                 requirePermission(owner); requireState(ticket, "IN_PROGRESS");
                 ticket.resolutionSummary = requiredText(((ResolveTicketRequest) body).summary(), "summary");
                 ticket.status = "RESOLVED";
+                ticket.resolvedAt = clock.instant();
             }
             case "close" -> {
                 requirePermission(requester || engineer || admin); requireState(ticket, "RESOLVED");
@@ -207,6 +229,7 @@ public class TicketServiceImpl implements TicketService {
                         ticket.assigneeId = null;
                 }
                 ticket.status = "IN_PROGRESS"; ticket.closedAt = null; ticket.cycleStartedAt = clock.instant();
+                ticket.slaTracked = true; ticket.firstRespondedAt = null; ticket.resolvedAt = null;
             }
             case "priority-changes" -> {
                 requirePermission(admin);

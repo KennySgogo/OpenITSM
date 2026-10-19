@@ -25,4 +25,7 @@ public class TicketEntity {
     public String resolutionSummary;
     @TableField(updateStrategy = FieldStrategy.ALWAYS) public Instant closedAt;
     public Instant cycleStartedAt;
+    public boolean slaTracked;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS) public Instant firstRespondedAt;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS) public Instant resolvedAt;
 }

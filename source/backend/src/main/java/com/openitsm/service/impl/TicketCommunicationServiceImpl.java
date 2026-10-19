@@ -84,6 +84,10 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
         reply.content = body.content().strip(); reply.visibility = internal ? "INTERNAL" : "PUBLIC";
         reply.createdAt = clock.instant();
         replies.insert(reply);
+        if (!internal && ticket.firstRespondedAt == null
+            && Set.of("ENGINEER", "ADMIN").contains(actor.role)) {
+            ticket.firstRespondedAt = reply.createdAt;
+        }
         ticket.version++;
         tickets.updateById(ticket);
         audit.appendTicket(actorId, internal ? "TICKET_INTERNAL_NOTE" : "TICKET_REPLY", id,

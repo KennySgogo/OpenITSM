@@ -4,8 +4,8 @@
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
 - 接口前缀：`/api/v1`（健康检查除外）
-- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/操作记录（M04 前后端）、列表详情与检索（M05 前后端，暂不含 SLA）
-- M04 已完成回复、内部备注、附件及操作记录；M06 及之后模块尚未完整实现（本文档含接口设计稿）
+- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/附件/操作记录（M04 前后端）、列表详情与检索（M05 前后端）、处理时限（M07 前后端）
+- M06 已接入账号邮件投递，工单通知尚未实现；M08～M14 仍为设计稿。
 
 ## 通用约定
 
@@ -284,7 +284,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - resolutions 正文为 `summary`（公开解决摘要），仅负责工程师可将 IN_PROGRESS 改为 RESOLVED。摘要由 M05 的 resolutionSummary 返回，按工单可见性读取；不提供 M04 回复或操作记录查询接口。
 - close 仅限 RESOLVED。提单人可无正文，也可提供 `reason`；工程师或管理员代确认必须提供 `reason`。成功改为 CLOSED 并记录关闭时间。
 - reopen 正文为 `reason`，仅限提单人、负责工程师或管理员；RESOLVED 可重开，CLOSED 自关闭起 7×24 小时内（含等于 7 天）可重开，超出返回 409 INVALID_STATE。改为 IN_PROGRESS，保留优先级/最近解决摘要，清空关闭时间并更新当前轮次起点。原负责人仍为 ACTIVE ENGINEER 时保留；已停用或不再是工程师时清空负责人，由管理员后续分派（此边界已由用户补充确认）。
-- priority-changes 正文为 `priority`（P1～P4）与 `reason`，仅管理员可操作；不改变状态或轮次起点。新旧工单初始优先级 P3。此阶段仅保存轮次起点，不实现 M07 时限、超时和达标计算。
+- priority-changes 正文为 `priority`（P1～P4）与 `reason`，仅管理员可操作；不改变状态或轮次起点。新旧工单初始优先级 P3。M07 复用轮次起点计算时限、超时及达标状态。
 - `reason`、`summary` 均须为字符串，提供时去首尾空白后非空，无额外字段长度限制，沿用 256 KiB 总大小；未知字段及非法参数为 400 VALIDATION_FAILED。错误沿用统一结构。
 - 无权限为 403 FORBIDDEN；资源不存在或对员工不可见为 404 RESOURCE_NOT_FOUND；状态不允许、超过重开期限为 409 INVALID_STATE；目标非有效工程师或转派给当前负责人为 400 VALIDATION_FAILED。失败不更新工单、审计或成功幂等记录。
 - 流转、原因审计和成功幂等记录在同一事务提交；沿用 M01 成员控制锁，再锁成员行、工单行，使分派/认领与成员停用/降级串行，避免产生无效负责人。
@@ -312,7 +312,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - GET replies 合并公开回复与内部备注，每项为 `id`、`content`、`visibility`（PUBLIC/INTERNAL）、`authorId`、`authorName`、`createdAt`。员工只收到 PUBLIC 项，分页和 total 均先过滤；工程师、管理员可读取全部。姓名来自当前成员姓名。
 - GET operations 返回已有 M03 流转及本阶段新增回复/备注动作，每项为 `id`、`action`、`actorId`、`actorName`、`createdAt`、`details`。action 沿用审计编码：TICKET_CLAIM、TICKET_ASSIGNMENTS、TICKET_TRANSFERS、TICKET_SUSPENSIONS、TICKET_RESUME、TICKET_RESOLUTIONS、TICKET_CLOSE、TICKET_REOPEN、TICKET_PRIORITY_CHANGES；新增 TICKET_REPLY、TICKET_INTERNAL_NOTE。不返回成员审计或未知类型审计。
 - 员工 operations 在查询时排除 TICKET_INTERNAL_NOTE。回复/备注的 details 只含 replyId，不复制正文；流转的 details 含 before/after，字段只允许 status、assigneeId、priority、summary（公开解决摘要）、closedAt、cycleStartedAt。仅工程师、管理员在流转 details 中可另读 reason；员工不收到原因、内部审计字段或原始审计载荷。
-- 不存在或员工不可见的工单统一 404 RESOURCE_NOT_FOUND；未登录/失效 401 SESSION_EXPIRED，CSRF 错误 403 CSRF_INVALID，其余沿用通用错误。本阶段不计算首次响应或 SLA，PRD Q01 留待 M07 确认。
+- 不存在或员工不可见的工单统一 404 RESOURCE_NOT_FOUND；未登录/失效 401 SESSION_EXPIRED，CSRF 错误 403 CSRF_INVALID，其余沿用通用错误。首次响应及 SLA 由 M07 记录和计算，规则见下文。
 - 详情页接入回复/操作记录独立分页、公开回复及员工不可选的内部备注。正文按纯文本展示，内部备注明确标识；已关闭单展示限制与新建入口。发表成功刷新详情版本及记录，并显示最新页；结果不确定时保留原正文/路径/版本/幂等键、锁定表单重试，版本或状态冲突保留错误及正文并刷新详情，由用户重新确认。与 M03 写操作互相禁用，避免同页并行提交。
 - 附件细则已由用户确认。POST attachments 为 multipart/form-data，是 JSON 正文约定的例外；必须且仅提供一个文件 part `file` 和一个文本字段 `visibility`（PUBLIC/INTERNAL），重复/未知字段或多文件返回 400 VALIDATION_FAILED。单文件 1～10485760 字节（10 MiB，含上限），空文件 400、超限 413 REQUEST_TOO_LARGE；请求总大小额外允许 64 KiB 表单开销，其余 JSON 大小规则不变。不限制扩展名，不做预览或执行。
 - 附件上传需要 If-Match、Idempotency-Key，成功 HTTP 200，返回现有工单 `resourceId`、`acceptedVersion`、`replayed` 及 ETag；递增工单 version，不改变状态/负责人/轮次。幂等作用域同回复，请求摘要含原始文件名、SHA-256 内容哈希、visibility 及原版本。同键原文件/名称/可见性/原版本重放不重复写文件，即使之后已关闭也返回首次结果；任一项改变为 409 IDEMPOTENCY_CONFLICT。同键正在处理、版本缺失/非法/冲突沿用回复错误规则。
@@ -322,7 +322,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 上传增加 TICKET_ATTACHMENT / TICKET_INTERNAL_ATTACHMENT 操作，details 只含 attachmentId、fileName、size；员工的内部上传操作在分页/计数前过滤。文件名仅用于安全处理后的下载/展示，物理文件用随机 UUID 保存。成功附件不自动清理；事务回滚清理本次文件，进程异常/提交结果未知的残留保留人工核对，不提供暂存或删除接口。
 - 前端附件区独立分页、按权限选择公开/内部、文件大小校验及鉴权下载；上传保留 File/FormData、可见性、原版本和幂等键以重试，提交中或结果不确定时锁定选择，版本/状态冲突保留文件及错误并刷新详情，等待用户确认。上传与回复/流转互相禁用；关闭后隐藏上传入口，已有可见附件仍可下载。
 
-### M05 列表与检索（前后端已实现，暂不含 M07 SLA）
+### M05 列表与检索（前后端已实现）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -338,7 +338,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 列表项与详情均返回：id、number、title、description、businessType、impactScope、requesterId、requesterName、assigneeId、assigneeName、status、priority、version、createdAt、resolutionSummary、closedAt、cycleStartedAt。未分派的 assigneeId/assigneeName 为 null；无解决摘要或关闭时间时相应字段为 null。不返回账号邮箱、密码、令牌或内部审计原因。
 - 员工只可读取本人提交的工单；工程师、管理员可读取全部工单详情。解决摘要按工单可见性公开展示。GET 不修改工单、不创建审计或幂等记录，也不延长会话。
 - 前端 `/tickets?view=…` 对接列表、筛选、搜索和分页，`/tickets/{id}` 展示真实详情及解决摘要并接入 M03 操作区和 M04 回复/备注/附件/操作记录；提单成功可进入详情。
-- 按用户确认，本阶段不返回或显示 SLA 字段，不使用假指标；待 M07 实现后补齐原设计中的 SLA 数据。
+- 列表项和详情增加 `sla`，字段及计算规则见 M07；权限、分页和其他字段不变。
 
 ### M06 邮件通知（账号邮件后台投递已接入；工单通知未实现）
 
@@ -346,7 +346,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 工单关键动作通知仍属后续范围。前端不调用投递接口；M14 的 GET /api/v1/settings 及邮件配置状态页面均尚未实现，不作为当前配置入口。
 
-### M07 处理时限（未实现）
+### M07 处理时限（前后端已实现）
 
 无独立接口。SLA 时限与超时标识随工单数据返回：
 
@@ -358,7 +358,13 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 参数要点：
 
 - 时限由优先级决定：P1 15 分钟 / 4 小时，P2 1 小时 / 8 小时，P3 4 小时 / 24 小时，P4 8 小时 / 72 小时。
-- 从工单创建起算；挂起和转派不暂停计时。
+- 列表项和详情统一增加 `sla` 对象：`responseDueAt`、`resolutionDueAt` 为本轮目标时间，`firstRespondedAt`、`resolvedAt` 为本轮实际完成时间（未完成为 null），`responseOverdue`、`resolutionOverdue` 为布尔值。时间为带 UTC 标识的 ISO 8601，页面按 Asia/Shanghai 显示。
+- 首轮从创建起算，后续从重开时间 `cycleStartedAt` 起算，7×24 自然时间；挂起、分派、转派不暂停或重置。响应仅记录回复时角色为 ENGINEER/ADMIN 的首条非空公开文字回复，包括回复本人的单；内部备注、附件、受理和解决摘要不算首次响应。
+- 超时比较使用实际完成时间，尚未完成则用本次查询时间；严格超过目标才为 true，等于目标为 false。响应与解决独立判断，解决/关闭不虚构首次响应。解决后若仍无首次响应，该响应指标继续以查询时间判断。
+- 重开清空 `firstRespondedAt`、`resolvedAt`，更新本轮起点；保留已有公开解决摘要。调整优先级按本轮起点及新优先级重算，已完成指标也按新目标重新判断。
+- 写入实际时间与既有回复/流转、审计、版本及幂等记录同事务提交，重放不覆盖时间。GET 只计算返回值，不写数据库、不增加版本或延长会话；沿用 M05 的权限和错误。
+- 用户确认仅对新工单保证完整指标。V7 升级前的旧工单返回 `sla: null`（历史数据不足），不补造历史时间、不删除数据；旧工单重开后开始完整记录。
+- 前端列表显示响应/解决超时、达标或计时中；详情显示目标、实际时间及状态，可手动刷新。状态以最近一次加载为准，不使用浏览器时钟自行判定。
 
 ### M08 文本知识库（未实现）
 
