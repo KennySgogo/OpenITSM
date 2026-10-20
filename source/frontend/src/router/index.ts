@@ -5,6 +5,8 @@ import MembersPage from '../views/MembersPage.vue';
 import CreateTicketPage from '../views/CreateTicketPage.vue';
 import TicketsPage from '../views/TicketsPage.vue';
 import TicketDetailPage from '../views/TicketDetailPage.vue';
+import KnowledgePage from '../views/KnowledgePage.vue';
+import KnowledgeArticlePage from '../views/KnowledgeArticlePage.vue';
 import PlaceholderPage from '../views/PlaceholderPage.vue';
 import { sessionState, sessionNotice, restoreSession, clearSession } from '../stores/SessionStore';
 import { setExpiredHandler, ApiError } from '../api/HttpClient';
@@ -21,7 +23,9 @@ export const router = createRouter({
         { path: 'tickets/new', component: CreateTicketPage, meta: { title: '提交工单' } },
         { path: 'tickets/:id', component: TicketDetailPage, meta: { title: '工单详情' } },
         { path: 'dashboard', component: PlaceholderPage, meta: { title: '服务看板' } },
-        { path: 'knowledge', component: PlaceholderPage, meta: { title: '知识库' } },
+        { path: 'knowledge', component: KnowledgePage, meta: { title: '知识库' } },
+        { path: 'knowledge/new', component: KnowledgeArticlePage, meta: { title: '新建知识草稿' } },
+        { path: 'knowledge/:id', component: KnowledgeArticlePage, meta: { title: '知识详情' } },
         { path: 'settings', component: PlaceholderPage, meta: { title: '团队配置' } },
         { path: ':pathMatch(.*)*', component: PlaceholderPage, meta: { title: '页面未找到', missing: true } }
       ]

@@ -7,6 +7,7 @@ import com.openitsm.entity.NotificationTaskEntity;
 import com.openitsm.mapper.AuthMapper;
 import com.openitsm.mapper.NotificationMapper;
 import com.openitsm.mapper.UserMapper;
+import com.openitsm.mapper.TicketMapper;
 import com.openitsm.service.AccountMailDispatchService;
 import com.openitsm.service.SmtpMailService;
 import java.time.Clock;
@@ -28,14 +29,16 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     private final SmtpMailService smtp;
     private final AccountMailConfig config;
     private final Clock clock;
+    private final TicketMapper tickets;
     private final TransactionTemplate claims;
     private final TransactionTemplate deliveries;
 
     public AccountMailDispatchServiceImpl(NotificationMapper tasks, UserMapper users, AuthMapper auth,
                                          AccountMailCipher cipher, SmtpMailService smtp, AccountMailConfig config,
-                                         Clock clock, PlatformTransactionManager transactionManager) {
+                                         Clock clock, PlatformTransactionManager transactionManager, TicketMapper tickets) {
         this.tasks = tasks; this.users = users; this.auth = auth; this.cipher = cipher;
         this.smtp = smtp; this.config = config; this.clock = clock;
+        this.tickets = tickets;
         claims = new TransactionTemplate(transactionManager);
         claims.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         claims.setTimeout(5);
@@ -48,13 +51,12 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     public int dispatchPending() {
         if (!config.enabled()) return 0;
         config.requireReady();
-        cipher.requireReady();
         int processed = 0;
         while (processed < BATCH_SIZE) {
             NotificationTaskEntity task = claims.execute(status -> {
                 Instant now = clock.instant();
-                tasks.expireExhausted(now, MAX_ATTEMPTS);
-                return tasks.claim(now, now.plusSeconds(LEASE_SECONDS), MAX_ATTEMPTS);
+                tasks.expireExhausted(now, MAX_ATTEMPTS, config.ticketMailEnabled());
+                return tasks.claim(now, now.plusSeconds(LEASE_SECONDS), MAX_ATTEMPTS, config.ticketMailEnabled());
             });
             if (task == null) break;
             deliveries.executeWithoutResult(status -> deliver(task));
@@ -69,6 +71,28 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
         var user = users.lock(claimed.recipientId());
         var task = tasks.lockClaim(claimed.id(), claimed.attempts(), clock.instant());
         if (task == null) return; // A newer lease or cancellation owns this task now.
+        if ("TICKET".equals(task.template())) {
+            if (user == null || !"ACTIVE".equals(user.status)) {
+                finish(task, "FAILED", "ACCOUNT_UNAVAILABLE", clock.instant());
+                return;
+            }
+            var ticket = task.ticketId() == null ? null : tickets.selectById(task.ticketId());
+            if (ticket == null || ("EMPLOYEE".equals(user.role) && !user.id.equals(ticket.requesterId))) {
+                finish(task, "FAILED", "TICKET_NOT_VISIBLE", clock.instant());
+                return;
+            }
+            try {
+                smtp.sendTicket(user.emailNormalized, ticket.id, ticket.number, task.ticketAction());
+            } catch (BusinessException ex) {
+                retry(task, "SMTP_UNAVAILABLE");
+                return;
+            } catch (IllegalArgumentException ex) {
+                finish(task, "FAILED", "MAIL_INVALID", clock.instant());
+                return;
+            }
+            finish(task, "SUCCESS", null, clock.instant());
+            return;
+        }
         boolean invitation = "INVITE".equals(task.template());
         if (user == null || (!invitation && !"RESET".equals(task.template()))
             || !(invitation ? "INVITED" : "ACTIVE").equals(user.status)) {
@@ -117,7 +141,7 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     }
     private void finish(NotificationTaskEntity task, String status, String code, Instant nextAttempt) {
         if (tasks.finish(task.id(), task.attempts(), status, code, nextAttempt) != 1) {
-            throw new IllegalStateException("账号邮件任务领取状态已变化");
+            throw new IllegalStateException("邮件任务领取状态已变化");
         }
     }
 }

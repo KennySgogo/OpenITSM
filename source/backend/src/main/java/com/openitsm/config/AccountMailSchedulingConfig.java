@@ -28,7 +28,7 @@ public class AccountMailSchedulingConfig {
             String code = ex instanceof BusinessException failure ? failure.code : "DISPATCH_FAILED";
             if (!code.equals(lastFailure)) {
                 // Exception messages may contain payloads or credentials. Log only a classification.
-                log.warn("账号邮件调度暂不可用 code={} type={}", code, ex.getClass().getSimpleName());
+                log.warn("邮件调度暂不可用 code={} type={}", code, ex.getClass().getSimpleName());
                 lastFailure = code;
             }
         }

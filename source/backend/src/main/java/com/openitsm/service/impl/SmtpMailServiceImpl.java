@@ -5,6 +5,10 @@ import com.openitsm.config.AccountMailConfig;
 import com.openitsm.service.SmtpMailService;
 import jakarta.mail.MessagingException;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -12,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class SmtpMailServiceImpl implements SmtpMailService {
+    private static final Logger log = LoggerFactory.getLogger(SmtpMailServiceImpl.class);
     private final JavaMailSender sender;
     private final AccountMailConfig config;
 
@@ -35,6 +40,31 @@ public class SmtpMailServiceImpl implements SmtpMailService {
             + "内有效，只能使用一次。设置成功后，请返回登录页使用邮箱和密码登录。"
             + "\n\n" + (invitation ? "如果你不认识邀请方，请忽略此邮件。" : "如果你没有申请重置密码，请忽略此邮件。")
             + "\n\nOpenITSM 团队服务工作台\n";
+        deliver(recipient, subject, body);
+    }
+
+    @Override
+    public void sendTicket(String recipient, UUID ticketId, String number, String action) {
+        config.requireReady();
+        AccountMailConfig.validateAddress(recipient);
+        if (ticketId == null || number == null || !number.matches("ITSM-[0-9]+") || action == null)
+            throw new IllegalArgumentException("工单邮件参数无效");
+        String label = switch (action) {
+            case "assignments" -> "已分派";
+            case "transfers" -> "已转派";
+            case "replies" -> "新增公开回复";
+            case "resolutions" -> "已解决";
+            case "close" -> "已关闭";
+            case "reopen" -> "已重开";
+            default -> throw new IllegalArgumentException("工单邮件动作无效");
+        };
+        String link = config.publicBaseUrl() + "/tickets/" + ticketId;
+        deliver(recipient, "OpenITSM 工单 " + number + "：" + label,
+            "你好，\n\n工单 " + number + "：" + label + "。\n\n请登录 OpenITSM 查看详情：\n" + link
+                + "\n\n此邮件由系统自动发送，请勿直接回复。\n\nOpenITSM 团队服务工作台\n");
+    }
+
+    private void deliver(String recipient, String subject, String body) {
         try {
             var message = sender.createMimeMessage();
             var helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());

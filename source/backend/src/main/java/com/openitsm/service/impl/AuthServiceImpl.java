@@ -13,6 +13,7 @@ import com.openitsm.service.SessionService;
 import com.openitsm.common.exception.BusinessException;
 import com.openitsm.common.utils.TokenCodec;
 import com.openitsm.mapper.TicketMapper;
+import com.openitsm.mapper.KnowledgeArticleMapper;
 import com.openitsm.entity.UserEntity;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.vo.UserVO;
@@ -38,11 +39,13 @@ public class AuthServiceImpl implements AuthService {
     private final Clock clock;
     private final String dummyHash;
     private final TicketMapper tickets;
+    private final KnowledgeArticleMapper knowledge;
 
-    public AuthServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, org.springframework.transaction.PlatformTransactionManager transactionManager, AccountMailService mail, AuditService audit, PasswordEncoder encoder, Clock clock, TicketMapper tickets) {
+    public AuthServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, org.springframework.transaction.PlatformTransactionManager transactionManager, AccountMailService mail, AuditService audit, PasswordEncoder encoder, Clock clock, TicketMapper tickets, KnowledgeArticleMapper knowledge) {
         this.users = users; this.sessions = sessions; this.tokens = tokens; this.rates = rates;
         this.transactions = new org.springframework.transaction.support.TransactionTemplate(transactionManager); this.mail = mail; this.audit = audit; this.encoder = encoder; this.clock = clock;
         this.tickets = tickets;
+        this.knowledge = knowledge;
         this.dummyHash = encoder.encode(TokenCodec.token());
     }
 
@@ -113,6 +116,21 @@ public class AuthServiceImpl implements AuthService {
 
     private boolean allowedPath(UserEntity user, String value) {
         if (value == null || value.length() > 2048) return false;
+        if (value.equals("/knowledge/new")) return user.role.equals("ENGINEER");
+        if (value.startsWith("/knowledge?")) {
+            try {
+                String view = "PUBLISHED";
+                for (String item : java.net.URI.create(value).getRawQuery().split("&")) {
+                    if (item.startsWith("view=")) view = java.net.URLDecoder.decode(item.substring(5), java.nio.charset.StandardCharsets.UTF_8);
+                }
+                return view.equals("PUBLISHED") || (view.equals("MINE") && user.role.equals("ENGINEER"))
+                    || (view.equals("ALL") && user.role.equals("ADMIN"));
+            } catch (IllegalArgumentException ex) { return false; }
+        }
+        if (value.matches("/knowledge/[0-9a-fA-F-]{36}")) {
+            try { return knowledge.visible(UUID.fromString(value.substring("/knowledge/".length())), user.id, user.role); }
+            catch (IllegalArgumentException ex) { return false; }
+        }
         if (value.equals("/knowledge") || value.equals("/tickets") || value.equals("/tickets/new") || value.equals("/tickets?view=MINE")) return true;
         if (value.matches("/tickets/[0-9a-fA-F-]{36}")) {
             try { return user.role.equals("EMPLOYEE")

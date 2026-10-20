@@ -1,4 +1,11 @@
 export type Role = 'EMPLOYEE' | 'ENGINEER' | 'ADMIN';
+export interface KnowledgeArticle {
+  id: string; title: string; content: string; category: string; status: 'DRAFT' | 'PUBLISHED';
+  authorId: string; authorName: string; version: number;
+  createdAt: string; updatedAt: string; publishedAt: string | null;
+}
+export interface KnowledgeArticlePage { items: KnowledgeArticle[]; page: number; pageSize: number; total: number }
+export interface SaveKnowledgeArticle { title: string; content: string; category: string }
 export type MemberStatus = 'INVITED' | 'ACTIVE' | 'DISABLED';
 export interface User {
   id: string;

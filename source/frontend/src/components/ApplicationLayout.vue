@@ -18,9 +18,10 @@ const navigation = computed(() => [
   ...(user.value?.role === 'ADMIN' ? [{ to: '/dashboard', label: '服务看板', symbol: '▦' }] : []),
   { to: '/tickets?view=MINE', label: '我的工单', symbol: '▤', implemented: true },
   ...(user.value?.role !== 'EMPLOYEE' ? [{ to: '/tickets?view=ASSIGNED', label: '我的待办', symbol: '☑', implemented: true }, { to: '/tickets?view=UNASSIGNED', label: '未分派队列', symbol: '▥', implemented: true }, { to: '/tickets?view=ALL', label: '全部工单', symbol: '▤', implemented: true }] : []),
-  { to: '/knowledge', label: '知识库', symbol: '▧' }
+  { to: '/knowledge', label: '知识库', symbol: '▧', implemented: true }
 ]);
 function active(to: string) {
+  if (to === '/knowledge') return route.path === '/knowledge' || route.path.startsWith('/knowledge/');
   if (to.startsWith('/tickets?view=')) return route.path === '/tickets' && (route.query.view ?? 'MINE') === to.slice('/tickets?view='.length);
   return route.fullPath === to || (!to.includes('?') && route.path === to);
 }

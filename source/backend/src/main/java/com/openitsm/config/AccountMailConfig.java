@@ -21,6 +21,8 @@ public class AccountMailConfig {
     private final String publicBaseUrl;
     private final MailProperties properties;
     private final Environment environment;
+    @Value("${openitsm.ticket-mail.enabled:false}")
+    private boolean ticketMailEnabled;
 
     public AccountMailConfig(@Value("${openitsm.account-mail.enabled:false}") boolean enabled,
                              @Value("${openitsm.account-mail.from:}") String from,
@@ -83,6 +85,7 @@ public class AccountMailConfig {
 
     public String from() { return from; }
     public boolean enabled() { return enabled; }
+    public boolean ticketMailEnabled() { return ticketMailEnabled; }
     public String publicBaseUrl() { return publicBaseUrl.replaceAll("/+$", ""); }
     private static boolean blank(String value) { return value == null || value.isBlank(); }
     private static boolean loopback(String host) { return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host) || "::1".equals(host); }

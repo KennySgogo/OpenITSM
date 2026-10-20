@@ -38,7 +38,7 @@ M01 原子写入加密 notification_task，状态为 PENDING；重发/消费/停
 
 | 环境变量 | 用途与示例 |
 | --- | --- |
-| OPENITSM_ACCOUNT_MAIL_ENABLED | 默认 false；第三阶段确认配置和历史待发送收件人后再启用。开启后会自动处理现有 PENDING 和租约过期 RUNNING 任务 |
+| OPENITSM_ACCOUNT_MAIL_ENABLED | 默认 false；邮件投递总开关，启用前核对配置和积压收件人。账号任务开启后自动处理；工单任务另需开启 OPENITSM_TICKET_MAIL_ENABLED |
 | OPENITSM_SMTP_HOST | SMTP 主机，例如 smtp.163.com |
 | OPENITSM_SMTP_PORT | SMTP 端口，默认 465 |
 | OPENITSM_SMTP_USERNAME | 完整发件邮箱，由部署者本地填写 |
@@ -109,3 +109,21 @@ V7 新增本轮首次响应、解决时间及历史数据标识，不修改旧�
 `mvn -o -B -Dtest=M07HttpTest test` 验证四档时限、精确边界、回复角色、挂起/转派/重开、优先级重算、并发/重放/回滚、读取无副作用及 V6→V7 升级。先完成 `mvn -o -B verify`，再设置进程变量 `OPENITSM_M07_PACKAGED_VERIFY=true` 运行该测试，可额外启动最新 JAR，验证健康与真实接口后自动停止。仅支持默认 Testcontainers 隔离数据库，自动关闭真实邮件，日志在 target/m07-packaged-app.log。
 
 浏览器验收可同时设置 `OPENITSM_M07_HOLD_SECONDS`（最多 1200 秒）短暂保留独立应用和隔离夹具。验收后在 `OPENITSM_M07_RELEASE_FILE` 指定的唯一 target/ 路径创建标记以提前结束；默认不等待。浏览器通过临时 Vite 对接输出的应用端口，Origin 仍为 localhost:5173。
+
+## M06 工单邮件通知
+
+仅分派/转派、公开回复、解决、关闭、重开触发通知。收件人为提单人和动作后的负责人，去重并排除操作者；发送前重新检查 ACTIVE 状态和工单可见性。邮件仅包含编号、动作和需登录的详情链接，不含标题、描述、正文、原因、内部备注或附件。不新增前端页面和发信 HTTP 接口。
+
+V8 扩展现有 notification_task；工单任务只存 ticket_id / ticket_action，不需要账号令牌加密密钥，账号 INVITE/RESET 仍使用原加密载荷。业务、通知任务、审计和幂等结果同事务提交；入队失败整体回滚。网络投递放在后台，失败沿用最多4次尝试、60/300/900秒退避和120秒租约；SMTP 接受后回写失败可能重复发信。
+
+`OPENITSM_ACCOUNT_MAIL_ENABLED` 继续作为邮件投递总开关。工单邮件另需 `OPENITSM_TICKET_MAIL_ENABLED=true`，默认 false；不修改 .env，也不因已有账号邮件开关为 true 而自动发送新通知。关闭时工单任务仍入队，但不领取、不耗费尝试。启用前先核对数据库中全部积压工单任务及收件人；显式启用后会处理既有待发送任务。SMTP、发件地址和网站地址复用前述配置，localhost 网站链接只用于本机验收。
+
+`mvn -o -B -Dtest=M06HttpTest test` 运行真实 HTTP、隔离 PostgreSQL 及本地 SMTP 验证。先完成 `mvn -o -B verify` 生成最新 JAR，再在测试进程设置 `OPENITSM_M06_PACKAGED_VERIFY=true` 运行该测试，可额外启动独立 JAR，以测试专用本机 SMTP 验证自动调度、实际 MIME 接收和幂等重放后自动停止。仅允许默认 Testcontainers 数据库，不使用已有数据库选项，不向真实收件人发送；应用日志为 target/m06-packaged-app.log。
+
+## M08 文本知识库
+
+V9 新增 knowledge_article，不修改已应用迁移；接口与角色、状态、查询及写入规则见 API.md。知识库使用现有 Service 事务、账号锁、文章锁和版本/幂等记录，不发送通知。
+
+`mvn -o -B -Dtest=M08HttpTest test` 使用真实 HTTP 和隔离 PostgreSQL 验证生命周期、角色/降级、幂等、并发/回滚、查询分页、非法参数、GET 无副作用和 V8→V9 升级。先运行 `mvn -o -B verify` 打包，再设置进程变量 `OPENITSM_M08_PACKAGED_VERIFY=true` 运行专项测试，可启动独立 JAR，验证健康和实际接口；账号及工单邮件均关闭，仅允许 Testcontainers 数据库。日志在 target/m08-packaged-app.log。
+
+浏览器验收可另设 `OPENITSM_M08_HOLD_SECONDS`（最多1200秒）和唯一的 `OPENITSM_M08_RELEASE_FILE` 标记路径；临时 Vite 使用 localhost:5179，以 OPENITSM_BACKEND_URL 指向日志输出的随机 JAR 端口。创建释放标记后自动停止应用和测试容器；默认不等待。

@@ -16,6 +16,7 @@ import com.openitsm.service.AuthContext;
 import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketService;
+import com.openitsm.service.TicketNotificationService;
 import com.openitsm.vo.CreatedTicketVO;
 import com.openitsm.vo.ActionVO;
 import com.openitsm.vo.TicketPageVO;
@@ -46,11 +47,13 @@ public class TicketServiceImpl implements TicketService {
     private final Clock clock;
     private final TransactionLockMapper locks;
     private final AuditService audit;
+    private final TicketNotificationService notifications;
 
     public TicketServiceImpl(TicketMapper tickets, UserMapper users, IdempotencyService idem, SessionService sessions, Clock clock,
-        TransactionLockMapper locks, AuditService audit) {
+        TransactionLockMapper locks, AuditService audit, TicketNotificationService notifications) {
         this.tickets = tickets; this.users = users; this.idem = idem; this.sessions = sessions; this.clock = clock;
         this.locks = locks; this.audit = audit;
+        this.notifications = notifications;
     }
 
     @Override
@@ -244,6 +247,7 @@ public class TicketServiceImpl implements TicketService {
         tickets.updateById(ticket);
         audit.appendTicket(actorId, "TICKET_" + action.toUpperCase(Locale.ROOT).replace('-', '_'), id,
             Map.of("before", before, "after", snapshot(ticket)), reason, requestId);
+        notifications.enqueue(ticket, actorId, action);
         sessions.touch(context.session().hash());
         return idem.save(actorId, operation, key, hash, id, ticket.version, 200);
     }

@@ -19,6 +19,7 @@ import com.openitsm.service.AuthContext;
 import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketCommunicationService;
+import com.openitsm.service.TicketNotificationService;
 import com.openitsm.vo.ActionVO;
 import com.openitsm.vo.TicketOperationPageVO;
 import com.openitsm.vo.TicketOperationVO;
@@ -46,11 +47,14 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
     private final SessionService sessions;
     private final Clock clock;
     private final ObjectMapper json;
+    private final TicketNotificationService notifications;
 
     public TicketCommunicationServiceImpl(TicketMapper tickets, TicketReplyMapper replies, TicketOperationMapper operations,
-        UserMapper users, IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json) {
+        UserMapper users, IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json,
+        TicketNotificationService notifications) {
         this.tickets = tickets; this.replies = replies; this.operations = operations; this.users = users;
         this.idem = idem; this.audit = audit; this.sessions = sessions; this.clock = clock; this.json = json;
+        this.notifications = notifications;
     }
 
     @Override
@@ -92,6 +96,7 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
         tickets.updateById(ticket);
         audit.appendTicket(actorId, internal ? "TICKET_INTERNAL_NOTE" : "TICKET_REPLY", id,
             Map.of("replyId", reply.id), null, requestId);
+        if (!internal) notifications.enqueue(ticket, actorId, "replies");
         sessions.touch(context.session().hash());
         return idem.save(actorId, operation, requestKey, hash, id, ticket.version, 200);
     }

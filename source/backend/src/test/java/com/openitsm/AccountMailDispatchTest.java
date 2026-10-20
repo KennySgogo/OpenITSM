@@ -76,6 +76,7 @@ class AccountMailDispatchTest {
     @Autowired AccountMailCipher cipher;
     @Autowired AccountMailConfig mailConfig;
     @Autowired AuthMapper authMapper;
+    @Autowired com.openitsm.mapper.TicketMapper tickets;
     @Autowired JdbcTemplate db;
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired M01IntegrationTest.TestClock clock;
@@ -250,7 +251,7 @@ class AccountMailDispatchTest {
         doThrow(new IllegalStateException("simulated database write failure")).when(failingMapper)
             .finish(any(UUID.class), anyInt(), anyString(), nullable(String.class), any(Instant.class));
         var uncertainWorker = new AccountMailDispatchServiceImpl(failingMapper, users, authMapper, cipher,
-            smtp, mailConfig, clock, transactionManager);
+            smtp, mailConfig, clock, transactionManager, tickets);
         assertThatThrownBy(uncertainWorker::dispatchPending).isInstanceOf(IllegalStateException.class);
         assertThat(status(user)).isEqualTo("RUNNING");
         clock.advance(121);

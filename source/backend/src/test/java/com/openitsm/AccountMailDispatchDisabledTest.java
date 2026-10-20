@@ -23,7 +23,7 @@ class AccountMailDispatchDisabledTest {
         var cipher = mock(AccountMailCipher.class);
         var smtp = mock(SmtpMailService.class);
         var dispatch = new AccountMailDispatchServiceImpl(tasks, mock(UserMapper.class), mock(AuthMapper.class),
-            cipher, smtp, config, Clock.systemUTC(), mock(PlatformTransactionManager.class));
+            cipher, smtp, config, Clock.systemUTC(), mock(PlatformTransactionManager.class), mock(com.openitsm.mapper.TicketMapper.class));
         assertThat(dispatch.dispatchPending()).isZero();
         verifyNoInteractions(tasks, cipher, smtp);
     }
