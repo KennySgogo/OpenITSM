@@ -32,3 +32,11 @@ test('operation descriptions show changed public fields and preserve user text w
   assert.equal(historyActionLabel('TICKET_INTERNAL_NOTE'), '添加内部备注');
   assert.equal(historyActionLabel('unexpected'), '工单操作');
 });
+
+test('rejected tickets disallow all new communication', () => {
+  const rejected = { ...ticket, status: 'REJECTED' as const };
+  for (const role of ['EMPLOYEE', 'ENGINEER', 'ADMIN'] as const) {
+    assert.equal(canReply(rejected, { id: rejected.requesterId, role }), false);
+    assert.equal(canReply(rejected, { id: rejected.requesterId, role }, true), false);
+  }
+});

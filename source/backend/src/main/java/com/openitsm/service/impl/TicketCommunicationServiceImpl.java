@@ -81,7 +81,7 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
         if (previous != null) return previous;
         if (ticket.version != expectedVersion)
             throw new BusinessException(409, "VERSION_CONFLICT", "工单已更新，请刷新后重试");
-        if ("CLOSED".equals(ticket.status))
+        if (Set.of("CLOSED", "REJECTED").contains(ticket.status))
             throw new BusinessException(409, "INVALID_STATE", "工单已关闭，不能追加回复，请新建工单");
         var reply = new TicketReplyEntity();
         reply.id = UUID.randomUUID(); reply.ticketId = id; reply.authorId = actorId;
@@ -147,7 +147,7 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
                     }
                     result.put(side, snapshot);
                 }
-                if (!employee && event.reason != null) result.put("reason", event.reason);
+                if ((!employee || "TICKET_REJECTIONS".equals(event.action)) && event.reason != null) result.put("reason", event.reason);
             }
             return result;
         } catch (JsonProcessingException ex) { throw new IllegalStateException("Invalid ticket audit payload", ex); }

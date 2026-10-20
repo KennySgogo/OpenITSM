@@ -2,6 +2,7 @@
 import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import { useRoute, useRouter } from 'vue-router';
+import KnowledgeAttachments from '../components/KnowledgeAttachments.vue';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
@@ -11,6 +12,7 @@ import type { KnowledgeArticle, SaveKnowledgeArticle, MemberAction } from '../ty
 const route = useRoute(); const router = useRouter();
 const user = computed(() => sessionState.session?.user);
 const isNew = computed(() => route.path === '/knowledge/new');
+const attachmentLocked = ref(false);
 const article = ref<KnowledgeArticle>(); const editing = ref(false); const loading = ref(false);
 const { error, busy, blocked, waitSeconds, showError } = useFeedback();
 const form = ref<FormInstance>();
@@ -36,12 +38,12 @@ async function load(keepDraft = false) {
 }
 watch(() => route.path, () => { pending.value = undefined; void load(); }, { immediate: true });
 function startEdit() {
-  if (!article.value || !canEdit.value || blocked.value || loading.value) return;
+  if (!article.value || !canEdit.value || blocked.value || loading.value || attachmentLocked.value) return;
   Object.assign(model, { title: article.value.title, content: article.value.content, category: article.value.category });
   editing.value = true; error.value = undefined;
 }
 async function save() {
-  if (blocked.value || loading.value || (!isNew.value && !canEdit.value)) return;
+  if (blocked.value || loading.value || attachmentLocked.value || (!isNew.value && !canEdit.value)) return;
   if (!pending.value) {
     if (!await form.value?.validate().catch(() => false)) return;
     pending.value = { path: isNew.value ? '/knowledge-articles' : `/knowledge-articles/${article.value!.id}`,
@@ -50,12 +52,12 @@ async function save() {
   await submit();
 }
 async function transition(action: 'publish' | 'unpublish') {
-  if (!article.value || user.value?.role !== 'ADMIN' || blocked.value || loading.value || pending.value) return;
+  if (!article.value || user.value?.role !== 'ADMIN' || blocked.value || loading.value || attachmentLocked.value || pending.value) return;
   pending.value = { path: `/knowledge-articles/${article.value.id}/${action}`, method: 'POST', version: article.value.version, key: crypto.randomUUID() };
   await submit();
 }
 async function submit() {
-  if (!pending.value || blocked.value || loading.value) return;
+  if (!pending.value || blocked.value || loading.value || attachmentLocked.value) return;
   busy.value = true; error.value = undefined;
   try {
     const snapshot = pending.value;
@@ -78,13 +80,13 @@ async function submit() {
   <div class="page-heading"><div><span class="eyebrow">团队知识</span><h1>{{ isNew ? '新建知识草稿' : '知识详情' }}</h1></div><RouterLink :to="listPath"><ElButton>返回知识列表</ElButton></RouterLink></div>
   <ErrorNotice :error="error" />
   <ElAlert v-if="pending && error" class="article-notice" title="操作结果尚未确认。请重试原操作，内容、版本和幂等键会保持不变。" type="info" :closable="false" />
-  <ElButton v-if="pending && error" :disabled="blocked || loading" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '重试原操作' }}</ElButton>
-  <ElButton v-else-if="error && !isNew && !article" :disabled="blocked || loading" @click="load()">重新加载</ElButton>
+  <ElButton v-if="pending && error" :disabled="attachmentLocked || blocked || loading" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '重试原操作' }}</ElButton>
+  <ElButton v-else-if="error && !isNew && !article" :disabled="attachmentLocked || blocked || loading" @click="load()">重新加载</ElButton>
   <section v-if="isNew || article || loading" v-loading="loading" class="article-card">
     <template v-if="article">
       <div class="article-heading"><h2>{{ article.title }}</h2><ElTag :type="article.status === 'PUBLISHED' ? 'success' : 'info'">{{ article.status === 'PUBLISHED' ? '已发布' : '草稿' }}</ElTag></div>
       <p class="article-meta">{{ article.category }} · 作者 {{ article.authorName }} · 更新于 {{ new Date(article.updatedAt).toLocaleString('zh-CN') }}<span v-if="article.publishedAt"> · 发布于 {{ new Date(article.publishedAt).toLocaleString('zh-CN') }}</span></p>
-      <div v-if="!editing" class="article-actions"><ElButton :disabled="blocked || loading || !!pending" @click="load()">刷新知识</ElButton><ElButton v-if="canEdit" type="primary" :disabled="blocked || loading || !!pending" @click="startEdit">编辑草稿</ElButton><template v-if="user?.role === 'ADMIN'"><ElButton v-if="article.status === 'DRAFT'" type="primary" :disabled="blocked || loading || !!pending" @click="transition('publish')">发布知识</ElButton><ElButton v-else type="warning" :disabled="blocked || loading || !!pending" @click="transition('unpublish')">下架知识</ElButton></template></div>
+      <div v-if="!editing" class="article-actions"><ElButton :disabled="attachmentLocked || blocked || loading || !!pending" @click="load()">刷新知识</ElButton><ElButton v-if="canEdit" type="primary" :disabled="attachmentLocked || blocked || loading || !!pending" @click="startEdit">编辑草稿</ElButton><template v-if="user?.role === 'ADMIN'"><ElButton v-if="article.status === 'DRAFT'" type="primary" :disabled="attachmentLocked || blocked || loading || !!pending" @click="transition('publish')">发布知识</ElButton><ElButton v-else type="warning" :disabled="attachmentLocked || blocked || loading || !!pending" @click="transition('unpublish')">下架知识</ElButton></template></div>
       <p v-if="!editing" class="article-content">{{ article.content }}</p>
     </template>
     <template v-if="editing">
@@ -93,9 +95,10 @@ async function submit() {
         <ElFormItem label="标题" prop="title"><ElInput v-model="model.title" placeholder="填写知识标题" /></ElFormItem><ElFormItem label="分类" prop="category"><ElInput v-model="model.category" placeholder="填写分类" /></ElFormItem><ElFormItem label="正文" prop="content"><ElInput v-model="model.content" type="textarea" :rows="12" placeholder="填写问题现象、排查方法与解决步骤，仅保存纯文本" /></ElFormItem>
       </ElForm>
       <p class="article-meta">草稿仅作者工程师和管理员可见，由管理员发布后供团队阅读。</p>
-      <div class="article-actions"><ElButton type="primary" :loading="busy" :disabled="blocked || loading || !!pending || (!isNew && !canEdit)" @click="save">{{ isNew ? '保存草稿' : '保存修改' }}</ElButton><ElButton v-if="!isNew" :disabled="blocked || !!pending" @click="editing = false; error = undefined">取消编辑</ElButton></div>
+      <div class="article-actions"><ElButton type="primary" :loading="busy" :disabled="attachmentLocked || blocked || loading || !!pending || (!isNew && !canEdit)" @click="save">{{ isNew ? '保存草稿' : '保存修改' }}</ElButton><ElButton v-if="!isNew" :disabled="blocked || !!pending" @click="editing = false; error = undefined">取消编辑</ElButton></div>
     </template>
   </section>
+  <KnowledgeAttachments v-if="article" :key="article.id" :article="article" :refreshing="loading" :external-blocked="busy || !!pending || editing" @lock="attachmentLocked = $event" @refresh="load(true)" />
 </template>
 
 <style scoped>

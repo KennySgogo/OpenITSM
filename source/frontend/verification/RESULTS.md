@@ -140,3 +140,13 @@ HTTP 测试支持可选进程变量 OPENITSM_FRONTEND_BROWSER_HOLD_SECONDS，最
 截图：[草稿](./m08-draft.png)、[版本冲突](./m08-conflict.png)、[断连重试](./m08-retry.png)、[正文与分类搜索](./m08-search.png)、[员工阅读](./m08-published.png)。
 
 客户端闪退后重新执行 M08 专项及独立 JAR 验证（64263）：8项通过、BUILD SUCCESS，自动停止应用；日志 `source/backend/target/m08-packaged-final.log`。验收端口5179/57586/64263均已停止，截图保留。
+
+
+## M14 团队配置（2026-10-20）
+
+- 环境：Testcontainers PostgreSQL 17.11、独立 OpenItsmApplication JAR、真实 Python 3.12.15/FastAPI，以及仅本机接收固定文本的模型测试服务。Vite localhost:5189 代理隔离后端；用户原有 5173 服务未停止或修改。不调用真实供应商，不发送真实邮件。
+- 管理员登录后读取已保存配置，模型凭据仅显示已配置、输入框为空；保存团队名递增版本且不启用 AI、不自动测试。保存后旧版本的成功测试显示“旧配置结果”。AI 关闭下主动测试成功，返回对应保存版本；业务调用显示“暂无调用”。
+- 立即重复测试返回 429；修正后仅测试按钮冷却，表单及保存仍可用，成功保存下一版本。两个页面以同一版本编辑时，先保存者成功，后保存者收到 VERSION_CONFLICT，输入保留；重新读取恢复最新版本。
+- 员工登录后无管理导航，直接访问 /settings 显示无访问权限；员工工单列表仍可用。预期 409/429 为验收主动触发，未发现页面脚本异常。
+- 截图：m14-settings-success.jpg、m14-cooldown-isolation.jpg、m14-version-conflict.jpg、m14-employee-denied.jpg。前端 `npm test` 20 项通过，vue-tsc 与 Vite 构建通过，保留既有主包体积告警。
+- 验收结束释放夹具并停止临时 JAR/Python/Vite；不将本机测试服务成功视为真实供应商可用或真实邮箱送达。M01～M08 其他新增页面的完整验收不由本记录替代。

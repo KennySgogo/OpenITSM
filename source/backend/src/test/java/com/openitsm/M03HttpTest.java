@@ -121,7 +121,7 @@ class M03HttpTest {
 
     UUID ticket(String state, UUID assignee) throws Exception {
         var response = call(employee, "POST", "/api/v1/tickets", Map.of("title", "M03 ticket", "description", "Workflow test",
-            "businessType", "IT", "impactScope", "Test"), UUID.randomUUID().toString(), null);
+            "businessTypeId", TicketTypeTestSupport.type(db, "IT"), "impactScope", "Test"), UUID.randomUUID().toString(), null);
         assertThat(response.statusCode()).as(response.body()).isEqualTo(201);
         UUID id = UUID.fromString(data(response).path("id").asText());
         db.update("UPDATE ticket SET status=?,assignee_id=? WHERE id=?", state, assignee, id);
@@ -260,7 +260,7 @@ class M03HttpTest {
             error(action(owner, id, "resolutions", body, 0), 400, "VALIDATION_FAILED");
         error(action(admin, id, "priority-changes", Map.of("priority", "P5", "reason", "x"), 0), 400, "VALIDATION_FAILED");
         error(action(admin, id, "priority-changes", Map.of("priority", "P1"), 0), 400, "VALIDATION_FAILED");
-        for (UUID target : List.of(employeeId, adminId, UUID.randomUUID()))
+        for (UUID target : List.of(employeeId, UUID.randomUUID()))
             error(action(admin, id, "assignments", Map.of("assigneeId", target), 0), 400, "VALIDATION_FAILED");
         error(action(admin, id, "assignments", Map.of(), 0), 400, "VALIDATION_FAILED");
         db.update("UPDATE app_user SET status='DISABLED' WHERE id=?", otherId);

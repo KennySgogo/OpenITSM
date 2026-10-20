@@ -9,6 +9,7 @@ public class UserEntity {
     @TableId(type = IdType.INPUT) public UUID id;
     public String emailNormalized;
     public String name;
+    public String skillsDescription;
     public String role;
     public String status;
     public String passwordHash;

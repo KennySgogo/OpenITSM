@@ -82,6 +82,13 @@ public class AuthController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/password-changes")
+    public ResponseEntity<?> changePassword(@RequestBody com.openitsm.dto.ChangePasswordRequest body, HttpServletRequest req, HttpServletResponse res) {
+        auth.changePassword(RequestAuthentication.from(req), body, UUID.fromString((String) req.getAttribute("requestId")), req.getRemoteAddr());
+        cookie(res, null, true);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/password-reset-requests")
     public ResponseEntity<?> requestReset(@RequestBody PasswordResetRequest body, HttpServletRequest req) {
         String email = Values.email(body.email());

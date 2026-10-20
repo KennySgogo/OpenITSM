@@ -5,7 +5,6 @@ import ErrorNotice from '../components/ErrorNotice.vue';
 import TicketActions from '../components/TicketActions.vue';
 import TicketCommunication from '../components/TicketCommunication.vue';
 import TicketAttachments from '../components/TicketAttachments.vue';
-import TicketSla from '../components/TicketSla.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels } from '../types/ApiTypes';
@@ -44,8 +43,8 @@ watch(() => route.params.id, () => load(), { immediate: true });
         <ElDescriptionsItem label="业务类型">{{ ticket.businessType }}</ElDescriptionsItem><ElDescriptionsItem label="影响范围">{{ ticket.impactScope }}</ElDescriptionsItem>
         <ElDescriptionsItem label="创建时间">{{ new Date(ticket.createdAt).toLocaleString('zh-CN') }}</ElDescriptionsItem><ElDescriptionsItem v-if="ticket.closedAt" label="关闭时间">{{ new Date(ticket.closedAt).toLocaleString('zh-CN') }}</ElDescriptionsItem>
       </ElDescriptions>
-      <h3>处理时限（SLA）</h3><TicketSla :sla="ticket.sla" />
       <h3>问题描述</h3><p class="ticket-text">{{ ticket.description }}</p>
+      <template v-if="ticket.rejectionReason"><h3>拒绝原因</h3><p class="ticket-text">{{ ticket.rejectionReason }}</p><p>{{ ticket.rejectedAt ? new Date(ticket.rejectedAt).toLocaleString('zh-CN') : '' }}</p></template>
       <template v-if="ticket.resolutionSummary"><h3>解决摘要</h3><p class="ticket-text">{{ ticket.resolutionSummary }}</p></template>
     </template>
   </section>

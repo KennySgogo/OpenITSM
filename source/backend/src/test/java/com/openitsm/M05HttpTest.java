@@ -101,7 +101,7 @@ class M05HttpTest {
         return new Browser(client, data(result).path("csrfToken").asText());
     }
     String create(Browser browser, String title, String description, String businessType) throws Exception {
-        var result = call(browser, "POST", "/api/v1/tickets", Map.of("title", title, "description", description, "businessType", businessType, "impactScope", "Test scope"));
+        var result = call(browser, "POST", "/api/v1/tickets", Map.of("title", title, "description", description, "businessTypeId", TicketTypeTestSupport.type(db, businessType), "impactScope", "Test scope"));
         assertThat(result.statusCode()).isEqualTo(201); return data(result).path("id").asText();
     }
     JsonNode page(Browser browser, String query) throws Exception {
@@ -184,7 +184,7 @@ class M05HttpTest {
         assertThat(data(resolved).path("resolutionSummary").asText()).isEqualTo("Public network solution");
         assertThat(data(resolved).path("assigneeId").isNull()).isTrue();
         assertThat(response.body()).doesNotContain("password", "csrf", "authVersion", "email");
-        assertThat(value.path("sla").isObject()).isTrue();
+        assertThat(value.has("sla")).isFalse();
         assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record", Long.class)).isEqualTo(before);
         assertThat(db.queryForObject("SELECT count(*) FROM audit_event", Long.class)).isEqualTo(auditsBefore);
         error(call(new Browser(HttpClient.newHttpClient(), null), "GET", "/api/v1/tickets", null), 401, "SESSION_EXPIRED");

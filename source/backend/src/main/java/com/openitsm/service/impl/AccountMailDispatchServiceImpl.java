@@ -32,6 +32,8 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     private final TicketMapper tickets;
     private final TransactionTemplate claims;
     private final TransactionTemplate deliveries;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.openitsm.service.RuntimeSettingsService runtimeSettings;
 
     public AccountMailDispatchServiceImpl(NotificationMapper tasks, UserMapper users, AuthMapper auth,
                                          AccountMailCipher cipher, SmtpMailService smtp, AccountMailConfig config,
@@ -50,7 +52,8 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     @Override
     public int dispatchPending() {
         if (!config.enabled()) return 0;
-        config.requireReady();
+        if (runtimeSettings == null) config.requireReady();
+        else config.runtimeSender(runtimeSettings.current().smtp());
         int processed = 0;
         while (processed < BATCH_SIZE) {
             NotificationTaskEntity task = claims.execute(status -> {

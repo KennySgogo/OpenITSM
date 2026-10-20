@@ -15,6 +15,7 @@ public class TicketEntity {
     public String title;
     public String description;
     public String businessType;
+    public UUID businessTypeId;
     public String impactScope;
     public UUID requesterId;
     @TableField(updateStrategy = FieldStrategy.ALWAYS) public UUID assigneeId;
@@ -23,6 +24,8 @@ public class TicketEntity {
     public Instant createdAt;
     public String priority;
     public String resolutionSummary;
+    public String rejectionReason;
+    public Instant rejectedAt;
     @TableField(updateStrategy = FieldStrategy.ALWAYS) public Instant closedAt;
     public Instant cycleStartedAt;
     public boolean slaTracked;

@@ -127,3 +127,32 @@ V9 新增 knowledge_article，不修改已应用迁移；接口与角色、状�
 `mvn -o -B -Dtest=M08HttpTest test` 使用真实 HTTP 和隔离 PostgreSQL 验证生命周期、角色/降级、幂等、并发/回滚、查询分页、非法参数、GET 无副作用和 V8→V9 升级。先运行 `mvn -o -B verify` 打包，再设置进程变量 `OPENITSM_M08_PACKAGED_VERIFY=true` 运行专项测试，可启动独立 JAR，验证健康和实际接口；账号及工单邮件均关闭，仅允许 Testcontainers 数据库。日志在 target/m08-packaged-app.log。
 
 浏览器验收可另设 `OPENITSM_M08_HOLD_SECONDS`（最多1200秒）和唯一的 `OPENITSM_M08_RELEASE_FILE` 标记路径；临时 Vite 使用 localhost:5179，以 OPENITSM_BACKEND_URL 指向日志输出的随机 JAR 端口。创建释放标记后自动停止应用和测试容器；默认不等待。
+
+
+## M01～M08 补齐升级（源码已接入，运行验收受阻）
+
+新增 V10～V13 分别扩展技能、拒绝、统一类型、知识附件，不改旧迁移。类型升级按旧文本精确去重，保留旧文本与历史成功建单重放；新建须提供 businessTypeId。独立类型管理、本人资料及知识附件沿用原三层。
+
+M07 已替换为 GET /api/v1/dashboard/metrics，历史 SLA 字段保留，列表/详情不再返回 sla；前文 SLA 测试说明属于旧版本。新 M07HttpTest 验证简单统计，ModuleExtensionsHttpTest 验证本轮跨模块补齐。
+
+在可用 Docker/Testcontainers 或显式隔离测试数据库环境运行 `mvn verify`；专项为 `mvn -o -B -Dtest=ModuleExtensionsHttpTest,M07HttpTest,ApplicationStartupTest verify`。本轮仅编译、非数据库检查通过，实际阻塞与日志见根 STATUS。严禁以业务库替代测试库，真实邮件与模型均未启用。
+
+知识附件位于原附件根目录的 knowledge 子目录，数据库与全部附件一起备份。Servlet 允许知识 100 MiB，工单仍经 Filter/Service 限制 10 MiB；JSON 仍 256 KiB。成功文件及逻辑移除文件不自动删除。
+
+## M14 配置与模型连接测试
+
+管理员通过 `/settings` 维护团队名、SMTP、单个模型连接及 AI 开关，接口为 GET/PATCH `/api/v1/settings` 和 POST `/api/v1/settings/model-connection-tests`，详细字段见 API.md。V14 新增单例配置及独立测试/调用状态，不改旧迁移。SMTP 投递器和领取前校验每次读取已保存配置；保留原投递开关、收件人鉴权和积压任务检查，保存不会隐式发信。
+
+凭据复用 `OPENITSM_ACCOUNT_MAIL_KEY_FILE` 指定的 AES-GCM 主密钥文件，使用独立 AAD；只写不回显，显式清除后不会回退启动凭据。已有部署主密钥可复用，不自动生成、覆盖或更改 `.env`。数据库与密钥文件需共同备份；密钥不可用时凭据操作报错，不以默认值覆盖。首次局部保存按引导配置保留省略项，保存后全部以数据库为准，后续修改环境参数不会覆盖数据库值。
+
+Python 环境与内部认证说明见 `../ai-service/README.md`。Java 使用 `OPENITSM_AI_SERVICE_URL`（默认 loopback:8001）和 `OPENITSM_AI_INTERNAL_TOKEN`，两端内部 token 必须一致且至少 32 字符；模型密钥不用于内部服务认证。测试只使用已保存连接和固定文本，AI 关闭也可测试；每位管理员每 1 秒一次，失败仍占用限频窗口。状态带 testedVersion，旧配置的成功结果不证明新配置可用。
+
+```powershell
+mvn -o -B '-Dspring.test.context.cache.maxSize=4' verify
+```
+
+全量测试限制 Spring 上下文缓存，及时关闭旧测试连接池，避免共享隔离 PostgreSQL 达到连接上限；不修改生产连接池。`M14HttpTest` 覆盖权限/CSRF、凭据/局部更新、版本/幂等/并发、动态本机 SMTP、V13→V14 升级、错误及限频、测试途中配置变化。
+
+独立 JAR 验证：先成功打包，再对测试进程设置 `OPENITSM_M14_PACKAGED_VERIFY=true` 运行 `mvn -o -B -Dtest=M14HttpTest test`；会启动最新 JAR、真实 Python 和本机模型测试接收器，验证健康、权限、固定文本及 AI 关闭下测试，最终停止临时服务。仅允许默认 Testcontainers，不使用业务库或已有数据库选项，不发送真实邮件或请求外部模型。日志为 target/m14-packaged-app.log、m14-python-app.log。
+
+浏览器可设置 `OPENITSM_M14_HOLD_SECONDS`（最多 1200）与唯一的 `OPENITSM_M14_RELEASE_FILE`，在测试后短暂保留隔离应用；端口写入 target/m14-fixture.json，临时 Vite 使用该 backendUrl。创建释放标记后停止夹具，不自动删除历史文件。

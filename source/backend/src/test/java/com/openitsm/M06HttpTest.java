@@ -115,7 +115,7 @@ class M06HttpTest {
     }
     UUID ticket() throws Exception {
         var created = call(employee, "POST", "/api/v1/tickets", Map.of("title", "M06 ticket", "description", "Communication",
-            "businessType", "IT", "impactScope", "Test"), UUID.randomUUID().toString(), null);
+            "businessTypeId", TicketTypeTestSupport.type(db, "IT"), "impactScope", "Test"), UUID.randomUUID().toString(), null);
         assertThat(created.statusCode()).as(created.body()).isEqualTo(201);
         return UUID.fromString(data(created).path("id").asText());
     }

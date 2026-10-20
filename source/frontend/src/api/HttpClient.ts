@@ -55,7 +55,7 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
     response = await fetch(`/api/v1${path}`, {
       method, credentials: 'include', headers,
       body: options.body === undefined ? undefined : multipart ? options.body as FormData : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(20000)
+      signal: AbortSignal.timeout(multipart || options.binary ? 120000 : 20000)
     });
   } catch {
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: '无法连接服务，请检查网络后重试', retryable: true });
@@ -81,7 +81,7 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
     await sleep(1000);
     return request<T>(path, options, csrfRetry, busyRetries + 1);
   }
-  if (response.status === 429 && path !== '/auth/activity') cooldownUntil = Math.max(cooldownUntil, Date.now() + failure.retryAfter * 1000);
+  if (response.status === 429 && path !== '/auth/activity' && path !== '/settings/model-connection-tests') cooldownUntil = Math.max(cooldownUntil, Date.now() + failure.retryAfter * 1000);
   if (response.status === 401 && failure.code !== 'AUTH_INVALID') expired(failure);
   throw failure;
 }

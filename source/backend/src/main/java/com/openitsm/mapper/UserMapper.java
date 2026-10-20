@@ -20,7 +20,7 @@ public interface UserMapper extends BaseMapper<UserEntity> {
     @Select("SELECT count(*) FROM app_user WHERE role='ADMIN' AND status='ACTIVE'")
     int activeAdmins();
 
-    @Select("SELECT * FROM app_user WHERE role='ENGINEER' AND status='ACTIVE' ORDER BY name,id")
+    @Select("SELECT * FROM app_user WHERE role IN ('ENGINEER','ADMIN') AND status='ACTIVE' ORDER BY name,id")
     List<UserEntity> activeEngineers();
 
     default Page<UserEntity> findPage(int page, String q, String role, String status) {

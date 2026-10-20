@@ -86,7 +86,7 @@ class M02HttpTest {
 
     Map<String, String> fields() {
         return new LinkedHashMap<>(Map.of("title", "无法连接网络", "description", "办公电脑无法连接内网",
-            "businessType", "网络", "impactScope", "本人"));
+            "businessTypeId", TicketTypeTestSupport.type(db, "网络").toString(), "impactScope", "本人"));
     }
 
     HttpResponse<String> create(Browser browser, Map<String, String> body, String key) throws Exception {
@@ -128,7 +128,7 @@ class M02HttpTest {
             assertThat(stored.get("number")).isEqualTo(result.path("number").asText());
             assertThat(stored.get("title")).isEqualTo(body.get("title").strip());
             assertThat(stored.get("description")).isEqualTo(body.get("description"));
-            assertThat(stored.get("business_type")).isEqualTo(body.get("businessType"));
+            assertThat(stored.get("business_type_id").toString()).isEqualTo(body.get("businessTypeId"));
             assertThat(stored.get("impact_scope")).isEqualTo(body.get("impactScope"));
             assertThat(stored.get("requester_id")).isEqualTo(actorId);
             assertThat(stored.get("assignee_id")).isNull();
@@ -147,14 +147,14 @@ class M02HttpTest {
         assertThat(first.statusCode()).isEqualTo(201);
         // JSON property order is not part of the existing DTO-based digest.
         var replay = call(browser, "POST", "/api/v1/tickets",
-            "{\"impactScope\":\"本人\",\"businessType\":\"网络\",\"description\":\"办公电脑无法连接内网\",\"title\":\"无法连接网络\"}", key);
+            json.writeValueAsString(new java.util.TreeMap<>(fields())), key);
         assertThat(replay.statusCode()).isEqualTo(201);
         assertThat(data(replay).path("id")).isEqualTo(data(first).path("id"));
         assertThat(data(replay).path("number")).isEqualTo(data(first).path("number"));
         assertThat(data(replay).path("replayed").asBoolean()).isTrue();
         assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
         for (String field : fields().keySet()) {
-            var changed = fields(); changed.put(field, changed.get(field) + " ");
+            var changed = fields(); changed.put(field, field.equals("businessTypeId") ? UUID.randomUUID().toString() : changed.get(field) + " ");
             error(create(browser, changed, key), 409, "IDEMPOTENCY_CONFLICT");
         }
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(1);

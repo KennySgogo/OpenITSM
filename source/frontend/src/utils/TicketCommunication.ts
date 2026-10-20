@@ -2,12 +2,13 @@ import { ticketStatusLabels } from '../types/ApiTypes.ts';
 import type { Ticket, User, TicketHistoryOperation } from '../types/ApiTypes.ts';
 
 export function canReply(ticket: Ticket, user: Pick<User, 'id' | 'role'>, internal = false): boolean {
-  if (ticket.status === 'CLOSED') return false;
+  if (['CLOSED', 'REJECTED'].includes(ticket.status)) return false;
   if (user.role === 'ENGINEER' || user.role === 'ADMIN') return true;
   return !internal && ticket.requesterId === user.id;
 }
 
 const labels: Record<string, string> = {
+  TICKET_REJECTIONS: '拒绝工单',
   TICKET_CLAIM: '认领 / 受理', TICKET_ASSIGNMENTS: '分派', TICKET_TRANSFERS: '转派',
   TICKET_SUSPENSIONS: '挂起', TICKET_RESUME: '恢复', TICKET_RESOLUTIONS: '解决',
   TICKET_CLOSE: '关闭', TICKET_REOPEN: '重开', TICKET_PRIORITY_CHANGES: '调整优先级',

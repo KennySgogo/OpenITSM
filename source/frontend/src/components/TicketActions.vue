@@ -28,10 +28,10 @@ const pending = ref<{ path: string; options: RequestOptions }>();
 watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
 onUnmounted(() => emit('lock', false));
 const choosingAssignee = computed(() => ['assignments', 'transfers'].includes(operation.value));
-const needsReason = computed(() => ['suspensions', 'reopen', 'priority-changes'].includes(operation.value)
+const needsReason = computed(() => ['suspensions', 'reopen', 'priority-changes', 'rejections'].includes(operation.value)
   || (operation.value === 'close' && props.ticket.requesterId !== sessionState.session?.user.id));
 const rules: FormRules = {
-  assigneeId: [{ required: true, message: '请选择工程师', trigger: 'change' }],
+  assigneeId: [{ required: true, message: '请选择处理人', trigger: 'change' }],
   reason: [{ required: true, whitespace: true, message: '请填写原因', trigger: 'blur' }],
   summary: [{ required: true, whitespace: true, message: '请填写公开解决摘要', trigger: 'blur' }],
   priority: [{ required: true, message: '请选择优先级', trigger: 'change' }]
@@ -102,7 +102,7 @@ async function submit() {
       <ErrorNotice :error="error" />
       <ElAlert v-if="pending && error" title="结果尚未确认，请重试原操作；原内容与版本已保留，避免重复执行。" type="info" :closable="false" />
       <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || !!pending" @submit.prevent="submit">
-        <ElFormItem v-if="choosingAssignee" label="目标工程师" prop="assigneeId"><ElSelect v-model="model.assigneeId" placeholder="请选择工程师" aria-label="目标工程师"><ElOption v-for="user in assignees" :key="user.id" :value="user.id" :label="`${user.name}（未解决 ${user.unresolvedCount}，待确认 ${user.pendingConfirmationCount}）`" /></ElSelect></ElFormItem>
+        <ElFormItem v-if="choosingAssignee" label="目标负责人" prop="assigneeId"><ElSelect v-model="model.assigneeId" placeholder="请选择处理人" aria-label="目标负责人"><ElOption v-for="user in assignees" :key="user.id" :value="user.id" :label="`${user.name}（未解决 ${user.unresolvedCount}，待确认 ${user.pendingConfirmationCount}）`" /></ElSelect></ElFormItem>
         <ElFormItem v-if="operation === 'priority-changes'" label="优先级" prop="priority"><ElSelect v-model="model.priority" aria-label="优先级"><ElOption v-for="priority in ['P1', 'P2', 'P3', 'P4']" :key="priority" :value="priority" :label="priority" /></ElSelect></ElFormItem>
         <ElFormItem v-if="needsReason" label="操作原因" prop="reason"><ElInput v-model="model.reason" type="textarea" :rows="4" placeholder="请填写操作原因" /></ElFormItem>
         <ElFormItem v-if="operation === 'resolutions'" label="公开解决摘要" prop="summary"><ElInput v-model="model.summary" type="textarea" :rows="5" placeholder="请填写公开解决摘要，提单人可见" /></ElFormItem>
@@ -111,7 +111,7 @@ async function submit() {
       <p v-if="operation === 'reopen'">重开后恢复为处理中，已关闭工单仅限关闭后 7 天内重开。</p>
       <template #footer>
         <ElButton :disabled="busy || !!pending" @click="dialog = false">取消</ElButton>
-        <ElButton v-if="choosingAssignee && !candidatesReady" :disabled="blocked" @click="loadAssignees">重新加载工程师</ElButton>
+        <ElButton v-if="choosingAssignee && !candidatesReady" :disabled="blocked" @click="loadAssignees">重新加载处理人</ElButton>
         <ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (choosingAssignee && !candidatesReady)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原操作' : '确认操作' }}</ElButton>
       </template>
     </ElDialog>

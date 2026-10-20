@@ -84,6 +84,21 @@ public class AccountMailConfig {
     }
 
     public String from() { return from; }
+    public boolean localProfile() { return environment.matchesProfiles("local", "test"); }
+
+    /** Validate a per-delivery snapshot without changing deployment switches or the shared sender. */
+    public JavaMailSenderImpl runtimeSender(com.openitsm.service.SettingsSnapshot.Smtp value) {
+        var mail = new MailProperties();
+        mail.setHost(value.host()); mail.setPort(value.port()); mail.setUsername(value.username()); mail.setPassword(value.password());
+        mail.getProperties().put("mail.smtp.ssl.enable", Boolean.toString("SSL".equals(value.security())));
+        mail.getProperties().put("mail.smtp.starttls.enable", Boolean.toString("STARTTLS".equals(value.security())));
+        mail.getProperties().put("mail.smtp.starttls.required", Boolean.toString("STARTTLS".equals(value.security())));
+        boolean localPeer = localProfile() && loopback(value.host());
+        mail.getProperties().put("mail.smtp.auth", Boolean.toString(!localPeer || !blank(value.username())));
+        var effective = new AccountMailConfig(enabled, value.from(), publicBaseUrl, mail, environment);
+        effective.requireReady();
+        return effective.javaMailSender();
+    }
     public boolean enabled() { return enabled; }
     public boolean ticketMailEnabled() { return ticketMailEnabled; }
     public String publicBaseUrl() { return publicBaseUrl.replaceAll("/+$", ""); }

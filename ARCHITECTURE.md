@@ -15,7 +15,7 @@
 | 迁移 | Flyway |
 | 前端 | Vue 3、TypeScript、Vite、Element Plus |
 | 账号邮件 | Spring Boot starter-mail / JavaMailSender、PostgreSQL 持久化任务、Spring 定时调度 |
-| AI | Python 3.13、FastAPI（独立服务，尚未创建） |
+| AI | Python 3.12.15、FastAPI（独立计算服务） |
 
 不引入 DDD、微服务、事件驱动、CQRS、Redis、外部消息队列。没有明确需求时不引入新的架构层或技术组件。
 
@@ -64,13 +64,13 @@ source/
 
 目录按类型划分，不按业务模块划分。**禁止新增架构层**，包括 `domain`、`repository`、`facade`、`manager`、`handler`、`aggregate`、`module`、`adapter`。本项目不采用这些目录。
 
-`ai/client/` 存放调用 Python 服务的客户端，Python 服务初始化前不创建占位代码。
+`ai/client/` 存放调用 Python 服务的客户端，使用 JDK HttpClient 调用 Python，不经过浏览器。
 
-### 本人密码与资料维护（拟实现）
+### 本人密码与资料维护
 
 本人改密复用 AuthController、AuthService/Impl、UserMapper、PasswordEncoder、会话撤销和账号令牌失效逻辑；成员锁内校验旧凭据并更新密码、authVersion 及成员 version，在同一事务撤销全部会话。审计只记录改密动作，不保存新旧密码或密码正文摘要，成功后前端清空会话并重新登录。
 
-本人资料拟使用 ProfileController，业务复用 UserService/Impl 和 UserMapper，不增加架构层。姓名沿用既有字段，技能描述需新增 Flyway 迁移扩展 app_user，旧账号技能默认为空；不修改已应用迁移。资料更新复用成员 version、幂等和成员锁，与管理员编辑协调，姓名/技能更新不撤销会话。前端复用已有表单、请求和错误组件提供本人资料及改密入口，路由和登录后返回路径白名单同步维护。
+本人资料使用 ProfileController → ProfileService/Impl → UserMapper，仍属于原有三层。V10 扩展 app_user.skills_description，旧账号技能默认为空；姓名沿用既有字段，不修改旧迁移。资料更新复用成员 version、幂等和成员锁，与管理员编辑协调，姓名/技能更新不撤销会话。前端复用已有表单、请求和错误组件提供本人资料及改密入口，路由和登录后返回路径白名单同步维护。
 
 M10 由 Java 从合法候选读取技能描述作为不可信参考文本，不把技能描述当作系统指令；Python 仍只做计算，不访问数据库。推荐结果仍经 Java 候选过滤并由用户确认，不增加员工读取其他成员完整资料的接口。
 
@@ -104,17 +104,17 @@ M08 沿用 Controller → Service → Mapper：`KnowledgeArticleController`、`K
 
 ### 工单创建与负责人指定
 
-M02 当前创建沿用四字段 DTO、幂等与事务，不写工单审计。已确认的全角色创建时可选负责人及分派通知尚未实现。指定负责人复用 `ticket.assignee_id`（V3 已有）、Controller → Service → Mapper，该字段不需要新增迁移；此结论不覆盖后续业务类型管理的数据设计。
+M02 创建使用统一类型 ID、可选负责人和初始优先级，复用原有幂等、事务及分派审计/通知。旧四字段 DTO 的成功请求只用于历史重放，不继续以自由文本新建。指定负责人复用 `ticket.assignee_id`（V3 已有）、Controller → Service → Mapper，该字段不需要新增迁移；此结论不覆盖后续业务类型管理的数据设计。
 
-初次指定在 `TicketServiceImpl.create` 的一个事务内完成，复用 M03 的目标有效性校验与分派审计语义，不从 Controller 串调两个写接口，也不能直接套用 M03“仅管理员分派”的操作权限。取得幂等预约后，沿用 member-control → 操作者成员行 → 目标成员行的锁序；验证当前会话及幂等重放后，才对新请求校验目标并创建 NEW、version=0 工单。分派审计记录初次负责人变化；复用 `TicketNotificationService.enqueue` 的 assignments 动作事务内入队，沿用排除操作者的收件人规则，自提自接不产生任务。任一失败整体回滚，重放不重复指定或入队；实际投递仍由现有后台任务执行，不在创建事务中调用 SMTP，不因通知需求自动开启投递配置；无负责人旧请求的摘要必须保持兼容。
+初次指定在 `TicketServiceImpl.create` 的一个事务内完成，复用 M03 的目标有效性校验与分派审计语义，不从 Controller 串调两个写接口，也不能直接套用 M03“仅管理员分派”的操作权限。取得幂等预约后，沿用 member-control → 操作者/目标成员行 → 类型行的锁序；验证当前会话及幂等重放后，才对新请求校验目标并创建 NEW、version=0 工单。分派审计记录初次负责人变化；复用 `TicketNotificationService.enqueue` 的 assignments 动作事务内入队，沿用排除操作者的收件人规则，自提自接不产生任务。任一失败整体回滚，重放不重复指定或入队；实际投递仍由现有后台任务执行，不在创建事务中调用 SMTP，不因通知需求自动开启投递配置；无负责人旧请求的摘要必须保持兼容。
 
 候选查询复用既有 Service/Mapper，按 M02/M03 已确认契约扩展读取权限及 ACTIVE ENGINEER/ADMIN 候选；与前后端管理员接单、处理权限及重开负责人校验同步调整，不能只放开选人。前端复用请求快照和详情入口，M05 按 assignee_id 查询即可展示新单；M03 claim 仍校验负责人、NEW 和版本。Service 与前端 Policy 都需统一“处理角色且本人负责”的判断，管理员接管先转派本人，成员工程师/管理员互转保留归属，降为员工或停用前复用交接保护。
 
-已确认但尚未实现的提单扩展继续沿用现有分层：初始优先级由创建 Service 校验并写入既有 priority 字段，不借用管理员专属调整动作；新增字段及默认值须兼容历史创建幂等摘要。业务类型管理拟使用 TicketTypeController、TicketTypeService/Impl、TicketTypeMapper 及对应 Entity/DTO/VO，由 Java 校验角色、创建者及选项可用性，不引入通用字典框架或新架构层。
+提单扩展沿用现有分层：初始优先级由创建 Service 校验并写入既有 priority 字段，不借用管理员专属调整动作；新增字段及默认值须兼容历史创建幂等摘要。业务类型管理使用 TicketTypeController、TicketTypeService/Impl、TicketTypeMapper 及对应 Entity/DTO/VO，由 Java 校验角色、创建者及选项可用性，不引入通用字典框架或新架构层。
 
-类型改名需统一历史展示，因此拟新增业务类型表及工单类型 ID 关联，以稳定 ID 聚合，名称通过关联读取；删除仅标记不可供新提单使用，保留历史引用。迁移使用新增 Flyway 文件，将已有 business_type 按现存文本精确去重并建立关联，初始项仅管理员可管理，不做语义归并或虚构工程师创建者；无旧值不预置类型。保留旧文本以便核对迁移及兼容历史幂等请求，不改写已应用迁移。本轮仅确定方案，迁移实施前须在隔离库核对工单总数、类型映射及历史重放，未完成验证不能移除旧字段。
+类型改名需统一历史展示，因此由 V12 增加业务类型表及工单类型 ID 关联，以稳定 ID 聚合，名称通过关联读取；删除仅标记不可供新提单使用，保留历史引用。迁移使用新增 Flyway 文件，将已有 business_type 按现存文本精确去重并建立关联，初始项仅管理员可管理，不做语义归并或虚构工程师创建者；无旧值不预置类型。保留旧文本以便核对迁移及兼容历史幂等请求，不改写已应用迁移。升级验收须在隔离库核对工单总数、精确类型映射及历史成功请求重放，验证前不得移除旧字段。
 
-前端拟增加独立 TicketTypePage，复用现有路由、请求和错误处理；工程师与管理员可进入管理页，提单页提供跳转入口，员工仅获取可选类型。M05 类型查询、M09 分类写入及 M13 统计需随稳定 ID 关联同步，知识库分类不因此自动改造。类型校验与改名、移除在 Service 事务中协调，沿用现有锁序，不以客户端候选列表代替最终校验。
+前端使用独立 TicketTypePage，复用现有路由、请求和错误处理；工程师与管理员可进入管理页，提单页提供跳转入口，员工仅获取可选类型。M05 类型查询、M09 分类写入及 M13 统计需随稳定 ID 关联同步，知识库分类不因此自动改造。类型校验与改名、移除在 Service 事务中协调，沿用现有锁序，不以客户端候选列表代替最终校验。
 
 提单附件由前端在确定创建成功后编排既有 M04 上传，与创建是独立请求和事务。复用现有文件选择、权限、版本及幂等机制，逐个上传并记录各自结果；未知结果重试原请求，明确失败按 M04 规则处理。文件仅保留于当前页面，工单已成功时不回滚工单、不重复创建，不引入服务端暂存或跨请求大事务。
 
@@ -122,21 +122,21 @@ M02 当前创建沿用四字段 DTO、幂等与事务，不写工单审计。已
 
 建单前推荐复用 M10 的 Java → Python 计算边界，由独立建议请求接收当前四项表单信息，不创建临时工单。Java 负责会话、候选权限、类型校验与输出过滤；Python 不访问数据库，不自动分派。前后推荐共用候选按业务类型的已解决/关闭数量、当前未结束负载及技能描述，不发送历史正文；最终仅返回候选标识、姓名和简短理由。前端人工确认后才设置负责人，AI 失败不阻塞建单；不增加提单标签字段。
 
-### 列表检索扩展（拟实现）
+### 列表检索扩展
 
-M05 扩展复用 TicketController/Service/Mapper 与现有分页：服务端将日期、人员、优先级及 lifecycle 转为有参数的查询条件，始终与可见范围、视图取交集；按 Asia/Shanghai 日期边界转换为时间范围，不对 created_at 逐行转文本比较。筛选选项由同一工单服务按可见数据和统一类型取回最小字段，不直接放开成员管理接口。ASSIGNED 默认未结束但支持历史切换；人员候选可含历史成员，不能与分派的 ACTIVE 角色校验混用。尚未实施，不为筛选引入搜索引擎或新架构层。
+M05 扩展复用 TicketController/Service/Mapper 与现有分页：服务端将日期、人员、优先级及 lifecycle 转为有参数的查询条件，始终与可见范围、视图取交集；按 Asia/Shanghai 日期边界转换为时间范围，不对 created_at 逐行转文本比较。筛选选项由同一工单服务按可见数据和统一类型取回最小字段，不直接放开成员管理接口。ASSIGNED 默认未结束但支持历史切换；人员候选可含历史成员，不能与分派的 ACTIVE 角色校验混用。不为筛选引入搜索引擎或新架构层。
 
-### 工单拒绝（拟实现）
+### 工单拒绝
 
-拒绝沿用 TicketController → TicketServiceImpl → TicketMapper，不增加架构层。需以新增迁移增加 rejection_reason、rejected_at 字段并校验拒绝状态的数据一致性，保留历史负责人；状态更新、公开原因、时间、版本、审计和成功幂等同事务提交，不调用通知入队。现有流转、回复与附件写入统一拒绝 REJECTED，读取和鉴权下载继续沿用原规则；前端 Policy、状态枚举及 M05 查询同步调整。
+拒绝沿用 TicketController → TicketServiceImpl → TicketMapper，不增加架构层。V11 增加 rejection_reason、rejected_at 字段并校验拒绝状态的数据一致性，保留历史负责人；状态更新、公开原因、时间、版本、审计和成功幂等同事务提交，不调用通知入队。现有流转、回复与附件写入统一拒绝 REJECTED，读取和鉴权下载继续沿用原规则；前端 Policy、状态枚举及 M05 查询同步调整。
 
 UserMapper/TicketMapper 的交接和负载查询按结束状态排除 CLOSED/REJECTED，保留 RESOLVED 待确认单的交接要求；不把拒绝写成解决时间，拒绝仅参与对应状态计数，不参与平均解决耗时。
 
-### 简单统计与看板（拟替换现有 SLA）
+### 简单统计与看板
 
-目标取消固定 SLA 目标、超时和达标率，M07 定义口径、M13 单一接口展示。Java 拟用 DashboardController → DashboardService/Impl → TicketMapper 做参数化聚合，复用工单时间、状态、负责人和统一类型，不调用 Python、不加缓存/消息队列或统计中间层。一次响应使用一致的数据库读取视图，状态/类型总量与人员负载能按定义对齐。
+目标取消固定 SLA 目标、超时和达标率，M07 定义口径、M13 单一接口展示。Java 使用 DashboardController → DashboardService/Impl → TicketMapper 做参数化聚合，复用工单时间、状态、负责人和统一类型，不调用 Python、不加缓存/消息队列或统计中间层。一次响应使用一致的数据库读取视图，状态/类型总量与人员负载能按定义对齐。
 
-平均解决耗时使用当前 RESOLVED/CLOSED 的有效 resolvedAt-createdAt，不将 updateTime、拒绝时间或评分混入。全部聚合默认无日期限制，可按 createdAt 的创建日期范围过滤，沿用 M05 的时区和边界转换；同次响应使用相同参数和读取视图。旧 SLA 已运行，实施时须同步停用列表/详情目标字段和前端标记，保留真实解决时间及历史数据；先核对兼容与迁移再处理冗余字段，不能修改旧 Flyway 或根据本文直接清库删列，当前源码未因此改变。
+平均解决耗时使用当前 RESOLVED/CLOSED 的有效 resolvedAt-createdAt，不将 updateTime、拒绝时间或评分混入。全部聚合默认无日期限制，可按 createdAt 的创建日期范围过滤，沿用 M05 的时区和边界转换；同次响应使用相同参数和读取视图。列表/详情响应不再返回 sla，页面撤下时限和超时；保留 resolvedAt 以及旧 SLA 存储字段供历史核对。新建不再启用 SLA 跟踪，不删旧列、不修改旧 Flyway；冗余字段后续处理须先核对兼容。
 
 ### 附件存储
 
@@ -146,15 +146,15 @@ UserMapper/TicketMapper 的交接和负载查询按结束状态排除 CLOSED/REJ
 
 从 `source/backend` 启动时默认目录为 `.local/attachments`，已加入后端 Git 忽略；`OPENITSM_ATTACHMENT_ROOT` 可用进程环境指定绝对路径。其他启动目录应显式指定该变量，避免工作目录改变存储位置。不修改 `.env`，不引入对象存储；变更存储目录时须先停止上传、迁移全部文件并核对元数据/哈希，再切换目录，不单独切换配置丢失既有文件。
 
-BrowserSecurityFilter 仅对附件上传 POST 放行 multipart，仍先校验会话、Origin 和 CSRF；Servlet 限制文件 10 MiB、总请求额外允许 64 KiB 表单开销，其余请求保留 256 KiB 限制。Service 计算内容摘要，沿用成员行→工单行锁，版本递增、审计、元数据和成功幂等同事务提交。文件以 CREATE_NEW 写入，事务明确回滚时只清理本次文件；提交结果未知、清理失败或进程异常退出时保留残留待人工核对，不自动扫描删除。数据库与文件目录必须一起备份和恢复。
+BrowserSecurityFilter 仅对精确工单/知识上传路径的 POST 放行 multipart，仍校验会话、Origin 和 CSRF；Servlet 上限 100 MiB、额外 64 KiB 表单开销，Filter 与 Service 将工单限制为 10 MiB、知识为 100 MiB，其余请求保留 256 KiB 限制。Service 计算内容摘要，沿用成员行→工单行锁，版本递增、审计、元数据和成功幂等同事务提交。文件以 CREATE_NEW 写入，事务明确回滚时只清理本次文件；提交结果未知、清理失败或进程异常退出时保留残留待人工核对，不自动扫描删除。数据库与文件目录必须一起备份和恢复。
 
-列表、下载和操作记录均校验工单可见性，员工在数据库分页统计前过滤内部附件。下载只返回 octet-stream 与 attachment 处置，不返回本地路径或哈希；文件不存在/异常为依赖不可用。ready 同时检查数据库和附件目录是否为可读写目录；该检查不能保证磁盘余量或识别所有文件损坏，具体读写失败仍由接口返回 503。
+列表、下载和操作记录均校验工单可见性，员工在数据库分页统计前过滤内部附件。下载只返回 octet-stream 与 attachment 处置，不返回本地路径或哈希；文件不存在/异常为依赖不可用。ready 同时检查数据库、工单附件根目录和 knowledge 子目录是否可读写；该检查不能保证磁盘余量或识别所有文件损坏，具体读写失败仍由接口返回 503。
 
-### 知识附件（拟实现）
+### 知识附件
 
-知识附件拟增加 KnowledgeAttachmentController、KnowledgeAttachmentService/Impl、KnowledgeAttachmentMapper 及对应 Entity/DTO/VO，沿用现有分层。新增 Flyway 表保存 article_id、文件元数据、上传者、removed_at/removed_by；移除只改记录，保留成功文件，不修改旧迁移、不增加通用附件管理框架。物理文件复用专用附件根目录及独立 knowledge 子目录，沿用随机名称、安全下载和回滚补偿；100 MiB 文件按流处理，不以整个文件字节数组作为常规缓冲。
+知识附件使用 KnowledgeAttachmentController、KnowledgeAttachmentService/Impl、KnowledgeAttachmentMapper 及对应 Entity/DTO/VO，沿用现有分层。V13 新增 Flyway 表保存 article_id、文件元数据、上传者、removed_at/removed_by；移除只改记录，保留成功文件，不修改旧迁移、不增加通用附件管理框架。物理文件复用专用附件根目录及独立 knowledge 子目录，沿用随机名称、安全下载和回滚补偿；100 MiB 文件按流处理，不以整个文件字节数组作为常规缓冲。
 
-知识上传单文件上限为 104857600 字节，multipart 总请求额外允许 64 KiB；实施时需调整 Servlet 上限和 BrowserSecurityFilter 的精确知识上传路径识别，同时保留工单上传 10 MiB/原请求上限及其他 JSON 256 KiB 限制。不能仅抬高全局 multipart 上限而放宽工单接口。控制器及 Service 再校验文件数量、大小和文章权限，复用现有身份、CSRF 和文件响应方式，不引入新依赖。
+知识上传单文件上限为 104857600 字节，multipart 总请求额外允许 64 KiB；Servlet 上限与 BrowserSecurityFilter 精确知识上传路径配套，同时保留工单上传 10 MiB/原请求上限及其他 JSON 256 KiB 限制。不能仅抬高全局 multipart 上限而放宽工单接口。控制器及 Service 再校验文件数量、大小和文章权限，复用现有身份、CSRF 和文件响应方式，不引入新依赖。
 
 正文修改、附件上传/移除、发布和下架锁同一文章并递增同一 version，沿用成员行→文章行顺序；附件写入仅本人作者工程师且 DRAFT，已发布须先下架。读取时再次按文章当前状态、调用者角色及附件未移除条件授权，不复用工单权限或靠文件 URL 判断。原作者降为员工后不能读草稿；管理员仅阅读草稿及发布/下架，不因附件新功能获得作者上传权。正文保持纯文本，知识文件不提供给 Python 或 AI 检索。
 
@@ -170,11 +170,11 @@ M12 草稿仅留前端当前页面，不增加服务端草稿表、草稿箱或�
 
 ### 团队设置与模型连接（拟实现）
 
-M14 拟用 SettingsController → SettingsService/Impl → SettingsMapper 维护单团队配置及最近调用/测试状态，新增 Flyway 表及版本字段，不新增配置框架。Java 保存运行参数、完成权限/版本/幂等校验，SMTP 和模型客户端按保存版本读取运行快照；读取配置不触发连接测试或邮件发送。当前 AccountMailConfig 绑定启动参数，实施时须接入运行配置提供能力并回归 M01/M06，不能只保存设置却仍使用旧启动值。
+M14 使用 SettingsController → SettingsService/Impl → SettingsMapper 维护单团队配置及最近调用/测试状态，新增 Flyway 表及版本字段，不新增配置框架。Java 保存运行参数、完成权限/版本/幂等校验，SMTP 和模型客户端按保存版本读取运行快照；读取配置不触发连接测试或邮件发送。RuntimeSettingsService/Impl 从单例 team_settings 读取不可变快照，未保存才使用启动引导值；SmtpMailServiceImpl 每次投递创建独立 SMTP sender，AccountMailDispatchServiceImpl 的领取前校验也使用数据库配置，AccountMailConfig 保留部署投递开关及 TLS/链接校验。
 
-SMTP 密码和模型密钥使用服务端加密后落库，主密钥仍由进程环境注入、不存入同一数据库或页面；复用既有加密能力时区分设置凭据与账号邮件令牌用途。数据库未设置时可读部署引导参数，保存后以数据库为准，显式清除不能回退旧环境值。返回仅 configured 标记，日志/审计不记录明文或完整设置正文，不通过接口改 .env；SMTP 投递总开关及积压任务保护继续沿用既有机制。
+SMTP 密码和模型密钥使用服务端加密后落库，复用 AccountMailCipher 的 AES-GCM 及部署端 account-mail-key-file；密钥文件路径仍由环境注入、不存入同一数据库或页面，AAD 使用 settings:固定ID:smtp/model，与账号邮件令牌隔离。数据库未设置时可读部署引导参数，保存后以数据库为准，显式清除不能回退旧环境值。返回仅 configured 标记，日志/审计不记录明文或完整设置正文，不通过接口改 .env；SMTP 投递总开关及积压任务保护继续沿用既有机制。
 
-Python 仍无数据库访问：Java 为每次计算提供服务端模型连接快照，仅用于模型客户端认证，不把密钥拼入提示词。内部 HTTP 客户端设有限连接/读取及总等待，服务端访问边界和调用方认证随部署配置校验；不将浏览器会话当作 Java→Python 凭据，不允许页面提交执行脚本。
+Python 仍无数据库访问：Java 为每次计算提供服务端模型连接快照，仅用于模型客户端认证，不把密钥拼入提示词。PythonAiClient 使用有界响应订阅与总等待取消，Python 使用 HTTPX 分段超时和 asyncio 总等待；两端禁止重定向。内部调用使用独立部署 token，默认 loopback、禁用 Python 文档/CORS，并拒绝超大正文；不将浏览器会话当作 Java→Python 凭据，不允许页面提交执行脚本。
 
 本版不建立每日额度扣减或预占体系，仅保留开关/配置/最近调用状态；模型连接测试在 AI 关闭时仍可由管理员主动执行，固定文本、独立限频，不自动保存表单或启用 AI。关停后新业务调用被阻止，在途结果返回前重验开关及权限，任何建议都不自动落业务数据。
 
@@ -309,3 +309,11 @@ local 配置通过 Spring Boot Config Data 导入本机 `.env` properties 文件
 接口规范维护在 [API.md](./API.md)，作为前后端开发与联调的约定。接口变更时同步维护请求、响应、错误和权限，不在接口文档中重复维护产品需求或项目进度。
 
 开始任何任务前先读这三份文档，并在同一次变更中更新受影响的文档。三份文档职责不重叠：PRD 不写代码结构，ARCHITECTURE 不写进度，STATUS 不写需求。
+
+### M14 Python 运行与配置持久化
+
+按用户指定复用本机 uv 管理的 Python 3.12.15，不另装新版解释器。source/ai-service 使用 pyproject.toml、uv.lock 与项目 .venv；运行版本范围 >=3.12,<3.14，此调整不改变 Java/Python 职责，也无历史 Python 服务迁移。app/main.py 仅提供固定文本模型连接测试；无数据库、脚本执行或 M09～M12 占位接口。
+
+V14 新增单例 team_settings 和独立 ai_connection_status；配置保存、版本、成功幂等结果同事务提交。测试编排使用短事务完成管理员/会话校验、限频及 RUNNING 记录，再在事务外等待 Python，最后以 attempt_id 条件更新结果并重验权限；状态更新不递增配置版本，旧尝试不能覆盖更新尝试。显式清除用 MyBatis ALWAYS 更新空值，避免 null 被忽略而恢复旧凭据。
+
+模型使用一个兼容 Chat Completions 的连接，Base URL 包含 API 前缀。Java 服务地址/内部 token 由 OPENITSM_AI_SERVICE_URL、OPENITSM_AI_INTERNAL_TOKEN 注入；Python 使用相同 token。生产模型要求 HTTPS，loopback HTTP 测试另需 Python 进程 OPENITSM_AI_ALLOW_LOCAL_MODEL=true。部署配置及主密钥不由设置页维护。RuntimeSettingsService 提供业务 AI 开关、配置完整性和返回前版本重验；具体业务权限和候选过滤随 M09～M12 接入。

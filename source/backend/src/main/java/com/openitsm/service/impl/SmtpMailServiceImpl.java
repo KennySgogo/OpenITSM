@@ -7,8 +7,6 @@ import jakarta.mail.MessagingException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -16,18 +14,24 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class SmtpMailServiceImpl implements SmtpMailService {
-    private static final Logger log = LoggerFactory.getLogger(SmtpMailServiceImpl.class);
     private final JavaMailSender sender;
     private final AccountMailConfig config;
+    private final com.openitsm.service.RuntimeSettingsService runtime;
 
     public SmtpMailServiceImpl(JavaMailSender sender, AccountMailConfig config) {
+        this(sender, config, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SmtpMailServiceImpl(JavaMailSender sender, AccountMailConfig config, com.openitsm.service.RuntimeSettingsService runtime) {
         this.sender = sender;
         this.config = config;
+        this.runtime = runtime;
     }
 
     @Override
     public void send(String recipient, String purpose, String rawToken) {
-        config.requireReady();
+        if (runtime == null) config.requireReady();
         AccountMailConfig.validateAddress(recipient);
         boolean invitation = "INVITE".equals(purpose);
         if ((!invitation && !"RESET".equals(purpose)) || rawToken == null || !rawToken.matches("[A-Za-z0-9_-]{43}")) {
@@ -45,7 +49,7 @@ public class SmtpMailServiceImpl implements SmtpMailService {
 
     @Override
     public void sendTicket(String recipient, UUID ticketId, String number, String action) {
-        config.requireReady();
+        if (runtime == null) config.requireReady();
         AccountMailConfig.validateAddress(recipient);
         if (ticketId == null || number == null || !number.matches("ITSM-[0-9]+") || action == null)
             throw new IllegalArgumentException("工单邮件参数无效");
@@ -65,15 +69,22 @@ public class SmtpMailServiceImpl implements SmtpMailService {
     }
 
     private void deliver(String recipient, String subject, String body) {
+        JavaMailSender transport = sender;
+        String from = config.from();
+        if (runtime != null) {
+            var snapshot = runtime.current();
+            transport = config.runtimeSender(snapshot.smtp());
+            from = snapshot.smtp().from();
+        }
         try {
-            var message = sender.createMimeMessage();
+            var message = transport.createMimeMessage();
             var helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
-            helper.setFrom(config.from());
+            helper.setFrom(from);
             helper.setTo(recipient);
             helper.setSubject(subject);
             helper.setText(body, false);
             message.setHeader("Auto-Submitted", "auto-generated");
-            sender.send(message);
+            transport.send(message);
         } catch (MailException | MessagingException ex) {
             // Transport exceptions may contain recipients, credentials or message bodies. Do not log or expose them.
             throw new BusinessException(503, "DEPENDENCY_UNAVAILABLE", "账号邮件投递暂不可用，请稍后重试");
