@@ -20,9 +20,10 @@ final class M14PackagedSupport {
         provider.createContext("/v1/chat/completions", exchange -> {
             var request = test.json.readTree(exchange.getRequestBody());
             boolean fixed = request.path("messages").size() == 1 && request.path("messages").get(0).path("content").asText()
-                .equals("Reply with OK. This is an OpenITSM connection test.");
+                .startsWith("Reply with OK. This is an OpenITSM connection test.");
             calls.incrementAndGet();
-            byte[] bytes = "{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}".getBytes(StandardCharsets.UTF_8);
+            String value = test.json.writeValueAsString(Map.of("businessTypeId", "00000000-0000-0000-0000-000000000009", "reason", "OK", "suggestedPriority", "P3"));
+            byte[] bytes = test.json.writeValueAsString(Map.of("choices", List.of(Map.of("finish_reason", "stop", "message", Map.of("content", value))))).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(fixed ? 200 : 400, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
         });
         provider.start();

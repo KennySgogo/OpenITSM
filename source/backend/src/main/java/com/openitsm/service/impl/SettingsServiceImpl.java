@@ -61,9 +61,9 @@ public class SettingsServiceImpl implements SettingsService {
     }
     private SettingsVO.StatusVO status(String kind, long version) {
         var status = statuses.find(kind);
-        if (status == null) return new SettingsVO.StatusVO("TEST".equals(kind) ? "NOT_TESTED" : "NO_CALLS", null, null, false);
+        if (status == null) return new SettingsVO.StatusVO("TEST".equals(kind) ? "NOT_TESTED" : "NO_CALLS", null, null, false, null);
         String state = "RUNNING".equals(status.status()) && status.occurredAt().plusSeconds(20).isBefore(clock.instant()) ? "AI_TIMEOUT" : status.status();
-        return new SettingsVO.StatusVO(state, status.configVersion(), status.occurredAt(), status.configVersion() == version);
+        return new SettingsVO.StatusVO(state, status.configVersion(), status.occurredAt(), status.configVersion() == version, status.outputMode());
     }
     @Transactional
     public ActionVO update(AuthContext context, JsonNode body, String version, String key) {
@@ -127,15 +127,17 @@ public class SettingsServiceImpl implements SettingsService {
             return value;
         });
         BusinessException failure = null;
-        try { python.testConnection(snapshot.model()); }
+        String mode = null;
+        try { mode = python.testConnection(snapshot.model()); }
         catch (BusinessException ex) { failure = ex; }
         String state = failure == null ? "SUCCESS" : failure.code;
         Instant at = clock.instant();
-        transaction.executeWithoutResult(tx -> statuses.finish("TEST", attempt, state, at));
+        String testedMode = mode;
+        transaction.executeWithoutResult(tx -> statuses.finishTest(attempt, state, at, testedMode));
         if (failure != null) throw failure;
         return transaction.execute(tx -> {
             requireAdmin(context, false);
-            return new ModelConnectionTestVO(state, snapshot.version(), at, runtime.current().version() == snapshot.version());
+            return new ModelConnectionTestVO(state, snapshot.version(), at, runtime.current().version() == snapshot.version(), testedMode);
         });
     }
 }

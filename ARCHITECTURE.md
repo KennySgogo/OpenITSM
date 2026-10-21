@@ -319,3 +319,9 @@ local 配置通过 Spring Boot Config Data 导入本机 `.env` properties 文件
 V14 新增单例 team_settings 和独立 ai_connection_status；配置保存、版本、成功幂等结果同事务提交。测试编排使用短事务完成管理员/会话校验、限频及 RUNNING 记录，再在事务外等待 Python，最后以 attempt_id 条件更新结果并重验权限；状态更新不递增配置版本，旧尝试不能覆盖更新尝试。显式清除用 MyBatis ALWAYS 更新空值，避免 null 被忽略而恢复旧凭据。
 
 模型使用一个兼容 Chat Completions 的连接，Base URL 包含 API 前缀。Java 服务地址/内部 token 由 OPENITSM_AI_SERVICE_URL、OPENITSM_AI_INTERNAL_TOKEN 注入；Python 使用相同 token。生产模型要求 HTTPS，loopback HTTP 测试另需 Python 进程 OPENITSM_AI_ALLOW_LOCAL_MODEL=true。部署配置及主密钥不由设置页维护。RuntimeSettingsService 提供业务 AI 开关、配置完整性和返回前版本重验；具体业务权限和候选过滤随 M09～M12 接入。
+
+### M09 结构化输出（阶段 B）
+
+复用 Python Pydantic + HTTPX，不引入 LangChain/LangGraph 或新架构层。每次按合法类型 ID 动态构造输出类型，模型 JSON Schema 和返回后校验来自同一类型；Python 校验字段、枚举和跨字段关系，Java 客户端只保留传输与 VO 解析，Service 重验当前业务权限/状态、配置及类型有效性。人工确认继续使用原事务与幂等。
+
+V16 仅为 ai_connection_status 增加可空 output_mode，不改旧迁移；SettingsService 在管理员主动连接测试后按配置版本及 attempt_id 保存协议模式，旧配置默认未验证，旧尝试不能覆盖新尝试。优先原生严格 JSON Schema，仅明确不支持时探测强制工具调用；固定样本、最多两次且共用总等待。有候选的业务请求只使用当前版本已验证模式执行一次，未验证或能力不支持保留人工流程。模式不记录密钥，不根据供应商名称分支，不增加持久化业务草稿或自动修复重试。

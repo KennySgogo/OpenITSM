@@ -164,3 +164,12 @@ HTTP 测试支持可选进程变量 OPENITSM_FRONTEND_BROWSER_HOLD_SECONDS，最
 - 员工直接进入类型管理页被拒绝；工程师可创建含说明的自有类型，仅自有行出现编辑/移除按钮。输入 501 字显示“说明最多 500 字”且保存禁用，清空说明后成功保存为“暂无说明”。
 - 截图：m09-a-type-description.png、m09-a-create-description.png、m09-a-manual-confirm.png、m09-a-history-final.png。最终页面无脚本错误。临时 Vite/独立 JAR/Python/测试数据库夹具已停止；默认 5173/8080/8001 服务继续运行阶段 A 版本。
 - 阶段 B 结构化输出和阶段 C 提单前建议仍待实施；本机模型接收器不证明真实供应商的分类质量。
+
+
+## M09 阶段 B：结构化输出验收（2026-10-21）
+
+- 使用最终独立 JAR、真实 Python、Testcontainers PostgreSQL 和本机模型接收器；临时前端 5189 代理隔离后端，未修改真实模型连接或调用真实供应商。先验证原生 JSON Schema，再让接收器明确拒绝 response_format，验证仅回退一次强制工具调用；说明与动态 ID Schema 完整传递。完整运行日志 source/backend/target/m09-b-packaged.log，专项 1 项通过；最终代码复核日志 m09-b-packaged-final.log。
+- 管理员设置页显示“强制工具调用”，主动测试成功；仅修改隔离团队名称并保存后，旧测试显示“旧配置结果”，当前模式“未验证”。此时详情生成提示管理员测试，人工选 M09 Old 并确认仍成功，P3 不变；重新测试新版本后恢复能力。
+- 员工登录同一隔离工单 ITSM-1，生成得到 M09 New/P2 建议时，实际类型仍为 M09 Old、优先级 P3；点击“选用建议类型”只填选择，点击“确认业务类型”后实际变为 M09 New，P3 不变，新增公开“确认业务类型”操作记录。员工不出现管理员优先级操作。
+- 截图：m09-b-structured-mode.png（已验证模式）、m09-b-config-unverified.png（配置变化失效）、m09-b-employee-suggestion.png（建议未生效）、m09-b-confirmed.png（人工确认结果）。临时页面/服务/隔离库已在验收后释放，默认服务保持运行。
+- 本次只完成阶段 B，不把提单页生成建议记为已完成；阶段 C 尚未实施。本机接收器只证明协议与应用链路，不证明真实模型质量。

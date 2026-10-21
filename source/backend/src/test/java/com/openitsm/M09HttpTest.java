@@ -137,6 +137,7 @@ class M09HttpTest {
     void enableAi() throws Exception {
         var result = call(admin, "PATCH", "/api/v1/settings", Map.of("aiEnabled", true), UUID.randomUUID().toString(), "\"0\"");
         assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        db.update("INSERT INTO ai_connection_status(kind,config_version,status,occurred_at,attempt_id,output_mode) VALUES ('TEST',1,'SUCCESS',?,?, 'JSON_SCHEMA')", java.sql.Timestamp.from(clock.instant()), UUID.randomUUID());
     }
 
     @Test void manualConfirmationChecksRolesStateReplayAndNoPriorityOrMail() throws Exception {
@@ -178,7 +179,7 @@ class M09HttpTest {
         assertThat(CALLS).hasValue(0);
     }
 
-    @Test void suggestionsUsePublicFieldsAndValidateReturnedCandidate() throws Exception {
+    @Test void suggestionsUsePublicFieldsAndRecheckTypeValidity() throws Exception {
         UUID id = ticket("NEW"); enableAi();
         error(suggest(stranger, id), 404, "RESOURCE_NOT_FOUND");
         error(suggest(other, id), 403, "FORBIDDEN");
@@ -209,6 +210,46 @@ class M09HttpTest {
             release.countDown();
             error(pending.get(), 409, "INVALID_STATE");
         } finally { release.countDown(); entered = null; release = null; }
+    }
+
+    @Test void unverifiedOrStaleCapabilityFailsBeforeModelButManualAndNoCandidatesStillWork() throws Exception {
+        UUID id = ticket("NEW"); enableAi();
+        db.update("UPDATE ai_connection_status SET output_mode=NULL WHERE kind='TEST'");
+        error(suggest(employee, id), 503, "AI_CAPABILITY_NOT_VERIFIED");
+        assertThat(CALLS).hasValue(0);
+        assertThat(confirm(employee, id, Map.of("businessTypeId", newType), UUID.randomUUID().toString(), 0).statusCode()).isEqualTo(200);
+        db.update("UPDATE ai_connection_status SET output_mode='JSON_SCHEMA',config_version=0 WHERE kind='TEST'");
+        error(suggest(employee, id), 503, "AI_CAPABILITY_NOT_VERIFIED");
+        db.update("UPDATE ticket_type SET active=false");
+        var empty = suggest(employee, id);
+        assertThat(empty.statusCode()).as(empty.body()).isEqualTo(200);
+        assertThat(data(empty).path("businessTypeId").isNull()).isTrue();
+        assertThat(CALLS).hasValue(0);
+    }
+
+    @Test void inFlightTypePermissionConfigAndSwitchChangesAreRechecked() throws Exception {
+        for (String change : List.of("TYPE", "PERMISSION", "CONFIG", "SWITCH")) {
+            setUp();
+            UUID id = ticket("NEW"); enableAi();
+            response = json.writeValueAsString(Map.of("businessTypeId", newType, "reason", "Network issue", "suggestedPriority", "P2"));
+            entered = new CountDownLatch(1); release = new CountDownLatch(1);
+            try (var pool = Executors.newSingleThreadExecutor()) {
+                var pending = pool.submit(() -> suggest(employee, id));
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                switch (change) {
+                    case "TYPE" -> db.update("UPDATE ticket_type SET active=false WHERE id=?", newType);
+                    case "PERMISSION" -> db.update("UPDATE app_user SET status='DISABLED',auth_version=auth_version+1 WHERE id=?", employeeId);
+                    case "CONFIG" -> db.update("UPDATE team_settings SET version=version+1");
+                    case "SWITCH" -> db.update("UPDATE team_settings SET ai_enabled=false,version=version+1");
+                }
+                release.countDown();
+                var result = pending.get();
+                if (change.equals("PERMISSION")) error(result, 401, "SESSION_EXPIRED");
+                else if (change.equals("TYPE")) error(result, 503, "AI_INVALID_RESPONSE");
+                else if (change.equals("SWITCH")) error(result, 503, "AI_DISABLED");
+                else error(result, 503, "DEPENDENCY_UNAVAILABLE");
+            } finally { release.countDown(); entered = null; release = null; }
+        }
     }
 
     @Test void packagedApplicationAndRealPythonWhenRequested() throws Exception {

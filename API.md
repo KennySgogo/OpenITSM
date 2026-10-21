@@ -470,7 +470,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 - 附件修订（已接入，待运行验收）：已发布文章 → 管理员下架 → 仅作者工程师/管理员可读 → 作者工程师上传或逻辑移除 → 保存更新版本 → 管理员重新发布；被移除文件保留存储但不再可下载。
 - 附件失败重试（已接入，待运行验收）：上传失败或未知 → 保留 File、文章原版本和键 → 按原请求确认结果 → 明确冲突时刷新并由用户确认 → 成功后才进入发布流程，不把本地待上传文件列为已发布附件。
 
-### M09 AI 业务类型建议（已接入，页面验收待完成）
+### M09 AI 业务类型建议（详情页已接入）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -619,7 +619,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 - 纯计算建议/检索/草稿请求使用既有会话、Origin 和 CSRF，不要求 If-Match 或业务 Idempotency-Key；不写工单版本。人工应用业务类型、分派、回复仍各自带版本与幂等键。页面提交中禁止重复点击，失败由用户主动重试，不自动重试外部生成；重新生成是新计算，不承诺恢复原草稿或原建议。
-- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。M09 已接入配置与权限重验；M10～M12 业务接口尚未实现，不将错误伪装成空结果。
+- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，当前配置能力未验证 503 AI_CAPABILITY_NOT_VERIFIED、不支持结构化输出 503 AI_STRUCTURED_OUTPUT_UNSUPPORTED、材料超限 503 AI_REQUEST_TOO_LARGE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。M09 已接入配置与权限重验；M10～M12 业务接口尚未实现，不将错误伪装成空结果。
 - Java 和 Python 设置有限连接/读写/总等待并及时取消，具体传输值在部署接入时校验；只回传可公开的错误说明，不回显密钥或原始供应商异常。AI 关闭阻止后续业务调用，已在途结果返回前重验开关/权限，关闭后不自动应用结果；管理员连接测试是独立例外。
 
 功能链路：
@@ -632,8 +632,8 @@ M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 - 未保存时 id 固定为 00000000-0000-0000-0000-000000000014、version=0，AI 默认关闭；首次成功 PATCH 返回 version=1。GET 不写库、不续期会话、不连接外部服务。teamName 为 1～80 字符；smtp.host ≤253、username/from ≤320、port 为整数；security 为 SSL/STARTTLS/NONE，NONE 仅 local/test 的 loopback 可用。允许保存尚未完整的连接，但不能启用不完整的 AI。
 - model.baseUrl ≤2048、model.model ≤200，地址禁止 userinfo/query/fragment，要求 HTTPS；local/test 允许 loopback HTTP。模型采用兼容 Chat Completions 的连接，baseUrl 包含 API 前缀（如 /v1），Python 追加 /chat/completions。密码和密钥最多 512 字符，拒绝纯掩码、空串、null、控制字符；省略保留，显式 clear 为 true 时落库空值且不回退部署凭据。其余字符串字段可留空表示未配置；未知字段、空对象及错误类型拒绝。
-- lastTest/lastCall 为 {status,testedVersion,occurredAt,current}；没有记录分别为 NOT_TESTED/NO_CALLS，版本和时间为 null。测试开始记录 RUNNING，完成为 SUCCESS 或公开错误码；异常退出后超过 20 秒的 RUNNING 读取为 AI_TIMEOUT，配置变更后 current=false。业务 AI 尚未接入时 lastCall 保持 NO_CALLS。
-- POST model-connection-tests 接受空正文或 {}，拒绝任何自定义字段；仅测试数据库已保存且完整的连接。成功 data 为 {status:"SUCCESS",testedVersion,occurredAt,current}；调用失败使用统一错误包装，同时保留对应版本的脱敏测试状态，限频在失败后仍有效。连接缺失返回 503 AI_NOT_CONFIGURED；内部认证缺失/供应商失败返回 503 DEPENDENCY_UNAVAILABLE；非法输出返回 503 AI_INVALID_RESPONSE；超时返回 504 AI_TIMEOUT。
+- lastTest/lastCall 为 {status,testedVersion,occurredAt,current,outputMode}；没有记录分别为 NOT_TESTED/NO_CALLS，版本和时间为 null。测试开始记录 RUNNING，完成为 SUCCESS 或公开错误码；异常退出后超过 20 秒的 RUNNING 读取为 AI_TIMEOUT，配置变更后 current=false。业务 AI 尚未接入时 lastCall 保持 NO_CALLS。
+- POST model-connection-tests 接受空正文或 {}，拒绝任何自定义字段；仅测试数据库已保存且完整的连接。成功 data 为 {status:"SUCCESS",testedVersion,occurredAt,current,outputMode}；调用失败使用统一错误包装，同时保留对应版本的脱敏测试状态，限频在失败后仍有效。连接缺失返回 503 AI_NOT_CONFIGURED；内部认证缺失/供应商失败返回 503 DEPENDENCY_UNAVAILABLE；非法输出返回 503 AI_INVALID_RESPONSE；超时返回 504 AI_TIMEOUT。
 - Python 模型请求连接/读/写/连接池超时分别为 2/5/3/2 秒，总等待 10 秒；Java → Python 连接 2 秒、请求 15 秒、含响应体总等待 16 秒，超限主动取消。两端禁止重定向；Python 响应体最多 64 KiB，Java 内部响应最多 16 KiB；无自动外部生成重试。浏览器仍使用既有 Cookie/Origin/CSRF。
 
 ## 内部接口（Java → Python，M09～M12 及 M14 模型测试）
@@ -648,6 +648,15 @@ M09～M12 共用调用约定（业务入口随对应模块接入）：
 | POST | /internal/v1/reply-drafts | 回复草稿生成 | M12 reply-drafts |
 | POST | /internal/v1/model-connection-tests | 固定文本连接测试，不使用工单材料 | M14 model-connection-tests |
 
-Python 侧只做 AI 计算，不访问数据库；输入材料（授权公开问题、合法处理人及汇总经验/负载/技能、授权检索语料）由 Java 组装后传入。模型连接凭据只供服务端传输客户端认证，不作为提示词材料，不提供 SMTP 或账号凭据，不写日志或响应；测试只走固定文本的独立内部入口，不借业务提示注入。内部调用需限制为服务端访问并校验调用方，最终输出由 Java 按角色、状态和候选集再次过滤。
+Python 侧只做 AI 计算，不访问数据库；输入材料（授权公开问题、合法处理人及汇总经验/负载/技能、授权检索语料）由 Java 组装后传入。模型连接凭据只供服务端传输客户端认证，不作为提示词材料，不提供 SMTP 或账号凭据，不写日志或响应；测试只走固定文本的独立内部入口，不借业务提示注入。内部调用需限制为服务端访问并校验调用方，M09 输出由 Python 按动态 Pydantic 类型校验结构、候选枚举及字段关系，Java 仅反序列化并复核当前业务权限、状态、配置版本及类型当前有效性；不在 Java 重复手写输出 Schema 校验。其他 AI 模块仍按各自契约接入。
 
-M14 内部测试正文为 {modelConnection:{baseUrl,model,apiKey}}，没有工单材料或 SMTP 字段；成功仅返回 {status:"SUCCESS"}，失败返回 {code}。Java 与 Python 使用部署端相同的内部 Bearer token（至少 32 字符），与浏览器会话无关。Python 默认仅监听 loopback、关闭文档与 CORS；不携带正确内部认证的请求在解析正文前拒绝，验证错误不返回输入值。生产须配置服务端网络隔离及 TLS；密钥只用于模型客户端 Authorization，不出现在固定测试文本、响应或日志。
+M14 内部测试正文为 {modelConnection:{baseUrl,model,apiKey}}，没有工单材料或 SMTP 字段；成功仅返回 {status:"SUCCESS",outputMode:"JSON_SCHEMA"|"TOOL_CALL"}，失败返回 {code}。Java 与 Python 使用部署端相同的内部 Bearer token（至少 32 字符），与浏览器会话无关。Python 默认仅监听 loopback、关闭文档与 CORS；不携带正确内部认证的请求在解析正文前拒绝，验证错误不返回输入值。生产须配置服务端网络隔离及 TLS；密钥只用于模型客户端 Authorization，不出现在固定测试文本、响应或日志。
+
+M09 结构化输出与能力验证：
+
+- 管理员连接测试最多发送两个固定无业务数据探针，共用 10 秒总等待；先用 response_format.json_schema（strict=true），仅供应商明确拒绝该参数/能力时再试强制函数工具调用（strict=true、固定 tool_choice、禁止并行）。鉴权、限流、超时、网络故障、一般参数或 Schema 错误、200 非法输出都不触发备用协议。两种协议均明确不支持时返回 AI_STRUCTURED_OUTPUT_UNSUPPORTED。测试通过仅证明该样本可用，业务输出仍逐次校验。
+- V16 为最近测试结果增加 outputMode，仅成功测试可记录 JSON_SCHEMA/TOOL_CALL；旧结果模式为 null，升级不伪造已验证。模式与 testedVersion、attempt_id 绑定，配置任何保存后须重测，旧在途测试不能覆盖新测试。GET 的 lastCall.outputMode 为 null；lastTest 为历史测试模式，current=false 时不得视为当前能力。
+- 详情页建议在有候选时要求当前配置有成功能力验证；否则 AI_CAPABILITY_NOT_VERIFIED，提示管理员测试。无候选直接返回三字段 null，不调用模型。请求仅按已验证模式执行一次，不在业务流程探测/自动重新生成。人工确认不依赖 AI 能力。
+- 内部 classification-suggestions 正文为 {modelConnection,ticket:{title,description,impactScope},businessTypes:[{id,name,description?}],outputMode}。Python 用同一 Pydantic 输出类型生成三字段必填、additionalProperties=false 的 Schema，businessTypeId 为本次有效 UUID ID 枚举或 null，reason 为最多 200 字说明或 null，suggestedPriority 为 P1～P4 或 null。ID 和 reason 必须成对为 null 或成对有效，理由非空且无控制字符；不猜测补齐字段。
+- 每次检查 finish_reason、拒答及唯一指定工具调用，拒绝截断、错误工具/多工具、额外字段、重复键、非法候选/优先级及理由关系；仅校验通过对象可离开 Python。Java 保留传输认证、大小/超时与 VO 解析和当前业务有效性检查，人工提交仍事务内校验。
+- Java→Python 正文最多 128 KiB；Python 序列化完整模型请求（含候选及 Schema）最多 256 KiB，超限明确拒绝、不截断候选；输出预算 1024 tokens，模型响应仍最多 64 KiB，Java 内部响应最多 16 KiB。失败诊断只含固定类别，不持久化原始输出、工单材料、提示词或凭据。

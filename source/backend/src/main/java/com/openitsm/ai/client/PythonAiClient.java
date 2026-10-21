@@ -25,15 +25,17 @@ public class PythonAiClient {
         .followRedirects(HttpClient.Redirect.NEVER).build();
     public PythonAiClient(ObjectMapper json, Environment env) { this.json = json; this.env = env; }
 
-    public void testConnection(SettingsSnapshot.Model model) {
+    public String testConnection(SettingsSnapshot.Model model) {
         var result = invoke("/internal/v1/model-connection-tests", Map.of("modelConnection", connection(model)));
-        if (result.size() != 1 || !"SUCCESS".equals(result.path("status").asText())) throw invalid();
+        String mode = result.path("outputMode").asText();
+        if (!"SUCCESS".equals(result.path("status").asText()) || !Set.of("JSON_SCHEMA", "TOOL_CALL").contains(mode)) throw invalid();
+        return mode;
     }
 
     public record BusinessTypeCandidate(UUID id, String name, String description) {}
 
     public ClassificationSuggestionVO suggestClassification(SettingsSnapshot.Model model, String title, String description,
-        String impactScope, List<BusinessTypeCandidate> candidates) {
+        String impactScope, List<BusinessTypeCandidate> candidates, String mode) {
         var types = candidates.stream().map(candidate -> {
             var value = new LinkedHashMap<String, String>();
             value.put("id", candidate.id().toString()); value.put("name", candidate.name());
@@ -41,28 +43,9 @@ public class PythonAiClient {
             return value;
         }).toList();
         var result = invoke("/internal/v1/classification-suggestions", Map.of("modelConnection", connection(model),
-            "ticket", Map.of("title", title, "description", description, "impactScope", impactScope), "businessTypes", types));
-        if (result.size() != 3 || !result.has("businessTypeId") || !result.has("reason") || !result.has("suggestedPriority")) throw invalid();
-        JsonNode type = result.get("businessTypeId"), reason = result.get("reason"), priority = result.get("suggestedPriority");
-        UUID typeId = null;
-        String explanation = null;
-        if (!type.isNull()) {
-            if (!type.isTextual() || !reason.isTextual()) throw invalid();
-            try { typeId = UUID.fromString(type.textValue()); }
-            catch (IllegalArgumentException ex) { throw invalid(); }
-            if (!type.textValue().equalsIgnoreCase(typeId.toString())) throw invalid();
-            explanation = reason.textValue().strip();
-            if (explanation.isEmpty() || explanation.codePointCount(0, explanation.length()) > 200
-                || explanation.chars().anyMatch(value -> value < 32 || value == 127)) throw invalid();
-            UUID selected = typeId;
-            if (candidates.stream().noneMatch(candidate -> candidate.id().equals(selected))) throw invalid();
-        } else if (!reason.isNull()) throw invalid();
-        String suggestedPriority = null;
-        if (!priority.isNull()) {
-            if (!priority.isTextual() || !Set.of("P1", "P2", "P3", "P4").contains(priority.textValue())) throw invalid();
-            suggestedPriority = priority.textValue();
-        }
-        return new ClassificationSuggestionVO(typeId, explanation, suggestedPriority);
+            "ticket", Map.of("title", title, "description", description, "impactScope", impactScope), "businessTypes", types, "outputMode", mode));
+        try { return json.treeToValue(result, ClassificationSuggestionVO.class); }
+        catch (com.fasterxml.jackson.core.JacksonException | IllegalArgumentException ex) { throw invalid(); }
     }
 
     private Map<String, String> connection(SettingsSnapshot.Model model) {
@@ -80,7 +63,7 @@ public class PythonAiClient {
                 || !("https".equals(target.getScheme()) || ("http".equals(target.getScheme())
                     && com.openitsm.service.impl.SettingsValidation.loopback(target.getHost())))) throw unavailable();
             String body = json.writeValueAsString(payload);
-            if (body.getBytes(StandardCharsets.UTF_8).length > 131072) throw unavailable();
+            if (body.getBytes(StandardCharsets.UTF_8).length > 131072) throw new BusinessException(503, "AI_REQUEST_TOO_LARGE", "AI 材料过大，请减少材料或人工选择");
             var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + token).POST(HttpRequest.BodyPublishers.ofString(body)).build();
             task = http.sendAsync(request, info -> new BoundedBodySubscriber());
@@ -94,6 +77,10 @@ public class PythonAiClient {
             String code = result.path("code").asText();
             if (response.statusCode() == 504 && "AI_TIMEOUT".equals(code)) throw timeout();
             if (response.statusCode() == 503 && "AI_INVALID_RESPONSE".equals(code)) throw invalid();
+            if (response.statusCode() == 503 && "AI_STRUCTURED_OUTPUT_UNSUPPORTED".equals(code))
+                throw new BusinessException(503, code, "模型连接不支持结构化输出，请更换兼容连接或人工处理");
+            if (response.statusCode() == 503 && "AI_REQUEST_TOO_LARGE".equals(code))
+                throw new BusinessException(503, code, "AI 材料过大，请减少材料或人工选择");
             throw unavailable();
         } catch (BusinessException ex) { throw ex; }
         catch (TimeoutException ex) { throw timeout(); }

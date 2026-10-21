@@ -49,17 +49,20 @@ public class ClassificationSuggestionServiceImpl implements ClassificationSugges
             eligibleTicket(context, ticketId);
             return new ClassificationSuggestionVO(null, null, null);
         }
+        var verified = statuses.find("TEST");
+        if (verified == null || verified.configVersion() != settings.version() || !"SUCCESS".equals(verified.status())
+            || !Set.of("JSON_SCHEMA", "TOOL_CALL").contains(verified.outputMode() == null ? "" : verified.outputMode()))
+            throw new BusinessException(503, "AI_CAPABILITY_NOT_VERIFIED", "请管理员先测试当前配置的结构化输出能力");
         UUID attempt = UUID.randomUUID();
         statuses.begin("CALL", settings.version(), clock.instant(), attempt);
         try {
             var suggestion = python.suggestClassification(settings.model(), ticket.title, ticket.description, ticket.impactScope,
-                candidates.stream().map(type -> new PythonAiClient.BusinessTypeCandidate(type.id, type.name, type.description)).toList());
+                candidates.stream().map(type -> new PythonAiClient.BusinessTypeCandidate(type.id, type.name, type.description)).toList(), verified.outputMode());
             runtime.recheckAiConnection(settings.version());
             eligibleTicket(context, ticketId);
             if (suggestion.businessTypeId() != null) {
-                Set<UUID> offered = candidates.stream().map(type -> type.id).collect(java.util.stream.Collectors.toSet());
                 var selected = types.selectById(suggestion.businessTypeId());
-                if (!offered.contains(suggestion.businessTypeId()) || selected == null || !selected.active)
+                if (selected == null || !selected.active)
                     throw new BusinessException(503, "AI_INVALID_RESPONSE", "建议类型已失效，请人工选择或重新生成");
             }
             statuses.finish("CALL", attempt, "SUCCESS", clock.instant());

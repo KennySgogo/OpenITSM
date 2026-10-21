@@ -19,9 +19,21 @@ final class M09PackagedSupport {
         test.db.update("UPDATE ticket_type SET description='Network and connectivity requests' WHERE id=?", test.newType);
         var provider = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         var calls = new AtomicInteger();
+        var toolMode = new java.util.concurrent.atomic.AtomicBoolean();
         var descriptionSeen = new java.util.concurrent.atomic.AtomicBoolean();
         provider.createContext("/v1/chat/completions", exchange -> {
             var request = test.json.readTree(exchange.getRequestBody());
+            boolean tool = request.has("tools");
+            if (toolMode.get() && !tool) {
+                byte[] bytes = "{\"error\":{\"param\":\"response_format\",\"code\":\"unsupported_parameter\"}}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(400, bytes.length); exchange.getResponseBody().write(bytes); exchange.close(); return;
+            }
+            if (request.path("messages").size() == 1) {
+                String probe = test.json.writeValueAsString(Map.of("businessTypeId", "00000000-0000-0000-0000-000000000009", "reason", "OK", "suggestedPriority", "P3"));
+                var message = tool ? Map.of("tool_calls", List.of(Map.of("type", "function", "function", Map.of("name", "classification_suggestion", "arguments", probe)))) : Map.of("content", probe);
+                byte[] bytes = test.json.writeValueAsString(Map.of("choices", List.of(Map.of("finish_reason", tool ? "tool_calls" : "stop", "message", message)))).getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close(); return;
+            }
             var materials = test.json.readTree(request.path("messages").get(1).path("content").asText());
             var type = test.newType.toString();
             for (var candidate : materials.path("businessTypes")) {
@@ -33,7 +45,11 @@ final class M09PackagedSupport {
             }
             calls.incrementAndGet();
             String output = test.json.writeValueAsString(Map.of("businessTypeId", type, "reason", "Matches supplied issue", "suggestedPriority", "P2"));
-            byte[] bytes = test.json.writeValueAsString(Map.of("choices", List.of(Map.of("message", Map.of("content", output)))))
+            var message = tool ? Map.of("tool_calls", List.of(Map.of("type", "function", "function", Map.of("name", "classification_suggestion", "arguments", output)))) : Map.of("content", output);
+            var schema = tool ? request.path("tools").get(0).path("function").path("parameters") : request.path("response_format").path("json_schema").path("schema");
+            assertThat(schema.path("additionalProperties").asBoolean(true)).isFalse();
+            assertThat(schema.path("properties").path("businessTypeId").toString()).contains(type);
+            byte[] bytes = test.json.writeValueAsString(Map.of("choices", List.of(Map.of("finish_reason", tool ? "tool_calls" : "stop", "message", message))))
                 .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
@@ -81,6 +97,9 @@ final class M09PackagedSupport {
                 "model", Map.of("baseUrl", "http://127.0.0.1:" + provider.getAddress().getPort() + "/v1",
                     "model", "local-m09-test", "apiKey", "m09-local-provider-test-key")), UUID.randomUUID().toString(), "\"0\"");
             assertThat(saved.statusCode()).as(saved.body()).isEqualTo(200);
+            var tested = test.call(test.admin, "POST", "/api/v1/settings/model-connection-tests", null, null, null);
+            assertThat(tested.statusCode()).as(tested.body()).isEqualTo(200);
+            assertThat(test.data(tested).path("outputMode").asText()).isEqualTo("JSON_SCHEMA");
             var id = test.ticket("NEW");
             var result = test.suggest(test.employee, id);
             assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
@@ -91,6 +110,18 @@ final class M09PackagedSupport {
             var manual = test.confirm(test.employee, id, Map.of("businessTypeId", test.newType), UUID.randomUUID().toString(), 0);
             assertThat(manual.statusCode()).as(manual.body()).isEqualTo(200);
             assertThat(test.db.queryForObject("SELECT priority FROM ticket WHERE id=?", String.class, id)).isEqualTo("P3");
+            toolMode.set(true);
+            var changed = test.call(test.admin, "PATCH", "/api/v1/settings", Map.of("teamName", "M09 Structured Output Acceptance"), UUID.randomUUID().toString(), "\"1\"");
+            assertThat(changed.statusCode()).as(changed.body()).isEqualTo(200);
+            test.error(test.suggest(test.employee, id), 503, "AI_CAPABILITY_NOT_VERIFIED");
+            Thread.sleep(1100);
+            tested = test.call(test.admin, "POST", "/api/v1/settings/model-connection-tests", null, null, null);
+            assertThat(tested.statusCode()).as(tested.body()).isEqualTo(200);
+            assertThat(test.data(tested).path("outputMode").asText()).isEqualTo("TOOL_CALL");
+            var toolResult = test.suggest(test.employee, id);
+            assertThat(toolResult.statusCode()).as(toolResult.body()).isEqualTo(200);
+            assertThat(test.data(toolResult).path("businessTypeId").asText()).isEqualTo(test.newType.toString());
+            assertThat(calls).hasValue(2);
             Files.writeString(Path.of("target/m09-fixture.json"), test.json.writeValueAsString(Map.of(
                 "backendUrl", "http://127.0.0.1:" + appPort, "pythonPort", pythonPort, "ticketId", id.toString(),
                 "adminEmail", "m09-admin@example.com", "employeeEmail", "m09-employee@example.com")));

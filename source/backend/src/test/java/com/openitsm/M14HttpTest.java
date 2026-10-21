@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.*;
 class M14HttpTest {
     static final String TOKEN = "m14-private-http-test-token-1234567890";
     static final AtomicInteger CALLS = new AtomicInteger();
-    static volatile String response = "{\"status\":\"SUCCESS\"}";
+    static volatile String response = "{\"status\":\"SUCCESS\",\"outputMode\":\"JSON_SCHEMA\"}";
     static volatile int responseCode = 200;
     static volatile CountDownLatch entered, release;
     static final HttpServer PYTHON;
@@ -74,6 +74,7 @@ class M14HttpTest {
     @Autowired BootstrapService bootstrap;
     @Autowired PasswordEncoder passwords;
     @Autowired RuntimeSettingsService runtime;
+    @Autowired com.openitsm.mapper.AiConnectionStatusMapper statuses;
     @Autowired M01IntegrationTest.TestClock clock;
     Browser admin, employee, engineer;
     UUID adminId;
@@ -90,7 +91,7 @@ class M14HttpTest {
             user.name = role; user.role = role; user.status = "ACTIVE"; user.passwordHash = passwords.encode(password); user.updatedAt = clock.instant(); users.insert(user);
         }
         admin = signed("m14-admin@example.com"); employee = signed("employee@example.com"); engineer = signed("engineer@example.com");
-        CALLS.set(0); response = "{\"status\":\"SUCCESS\"}"; responseCode = 200; entered = null; release = null;
+        CALLS.set(0); response = "{\"status\":\"SUCCESS\",\"outputMode\":\"JSON_SCHEMA\"}"; responseCode = 200; entered = null; release = null;
     }
     HttpResponse<String> call(Browser browser, String method, String path, Object body, String key, String version) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(25));
@@ -185,7 +186,11 @@ class M14HttpTest {
         error(test(), 503, "AI_NOT_CONFIGURED");
         assertThat(patch(Map.of("teamName", "Saved"), 0).statusCode()).isEqualTo(200);
         error(call(admin, "POST", "/api/v1/settings/model-connection-tests", Map.of("prompt", "custom"), null, null), 400, "VALIDATION_FAILED");
-        assertThat(test().statusCode()).isEqualTo(200); assertThat(CALLS).hasValue(1);
+        var successful = test();
+        assertThat(successful.statusCode()).as(successful.body()).isEqualTo(200);
+        assertThat(data(successful).path("outputMode").asText()).isEqualTo("JSON_SCHEMA");
+        assertThat(data(call(admin, "GET", "/api/v1/settings", null, null, null)).path("lastTest").path("outputMode").asText()).isEqualTo("JSON_SCHEMA");
+        assertThat(CALLS).hasValue(1);
         assertThat(runtime.current().aiEnabled()).isFalse();
         var limited = test(); error(limited, 429, "RATE_LIMITED"); assertThat(limited.headers().firstValue("Retry-After")).contains("1");
         clock.now = clock.now.plusMillis(999);
@@ -267,6 +272,37 @@ class M14HttpTest {
         var last = data(call(admin, "GET", "/api/v1/settings", null, null, null)).path("lastTest");
         assertThat(last.path("testedVersion").asInt()).isEqualTo(1); assertThat(last.path("current").asBoolean()).isFalse();
         assertThatThrownBy(() -> runtime.recheckAiConnection(1)).hasMessageContaining("AI 已关闭");
+    }
+
+    @Test void v15UpgradeLeavesExistingSuccessfulTestsUnverified() throws Exception {
+        String schema = "m16_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        String jdbcUrl, username;
+        try (var connection = db.getDataSource().getConnection()) {
+            jdbcUrl = connection.getMetaData().getURL(); username = connection.getMetaData().getUserName();
+        }
+        String dbPassword = System.getenv("OPENITSM_TEST_ADMIN_JDBC_URL") == null ? M01IntegrationTest.PG.getPassword() : System.getenv("OPENITSM_TEST_DB_PASSWORD");
+        var flyway = org.flywaydb.core.Flyway.configure().dataSource(jdbcUrl, username, dbPassword).schemas(schema).locations("classpath:db/migration");
+        flyway.target("15").load().migrate();
+        db.execute("INSERT INTO " + schema + ".ai_connection_status VALUES ('TEST',7,'SUCCESS',now(),'" + UUID.randomUUID() + "')");
+        var latest = flyway.target("16").load();
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM " + schema + ".ai_connection_status", String.class)).isEqualTo("SUCCESS");
+        assertThat(db.queryForObject("SELECT output_mode FROM " + schema + ".ai_connection_status", String.class)).isNull();
+        assertThat(latest.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test void latestAttemptOwnsModeAndUnsupportedIsPubliclyReported() throws Exception {
+        assertThat(patch(Map.of("teamName", "Saved"), 0).statusCode()).isEqualTo(200);
+        response = "{\"code\":\"AI_STRUCTURED_OUTPUT_UNSUPPORTED\"}"; responseCode = 503;
+        error(test(), 503, "AI_STRUCTURED_OUTPUT_UNSUPPORTED");
+        UUID first = UUID.randomUUID(), second = UUID.randomUUID();
+        statuses.begin("TEST", 1, clock.instant(), first);
+        statuses.begin("TEST", 2, clock.instant(), second);
+        statuses.finishTest(first, "SUCCESS", clock.instant(), "JSON_SCHEMA");
+        assertThat(statuses.find("TEST").outputMode()).isNull();
+        statuses.finishTest(second, "SUCCESS", clock.instant(), "TOOL_CALL");
+        assertThat(statuses.find("TEST").configVersion()).isEqualTo(2);
+        assertThat(statuses.find("TEST").outputMode()).isEqualTo("TOOL_CALL");
     }
 
     @AfterAll void packagedVerification() throws Exception {
