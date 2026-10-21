@@ -196,6 +196,57 @@ class ModuleExtensionsHttpTest {
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(before);
     }
 
+    @Test void typeDescriptionsPreserveOmittedClearExplicitlyAndEnforceLimits() throws Exception {
+        String endpoint = "/api/v1/ticket-types";
+        String createKey = key();
+        var body = Map.of("name", "Account", "description", "  Login and access requests  ");
+        var created = call(engineer, "POST", endpoint, body, createKey, null);
+        status(created, 201);
+        UUID id = UUID.fromString(data(created).path("id").asText());
+        String path = endpoint + "/" + id;
+        assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Login and access requests");
+        assertThat(data(call(engineer, "POST", endpoint, body, createKey, null)).path("replayed").asBoolean()).isTrue();
+        assertThat(data(call(employee, "GET", endpoint, null, null, null)).path("items").toString()).contains("Login and access requests");
+        status(call(engineer, "PATCH", path, Map.of("name", "Renamed account"), key(), version(0)), 200);
+        assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Login and access requests");
+        status(call(employee, "PATCH", path, Map.of("name", "Denied", "description", "Denied"), key(), version(1)), 403);
+        active("description-other@example.com", "ENGINEER");
+        status(call(signed("description-other@example.com"), "PATCH", path, Map.of("name", "Denied", "description", "Denied"), key(), version(1)), 403);
+        String clearKey = key();
+        var clear = Map.of("name", "Renamed account", "description", " ");
+        status(call(admin, "PATCH", path, clear, clearKey, version(1)), 200);
+        assertThat(data(call(admin, "PATCH", path, clear, clearKey, version(1))).path("replayed").asBoolean()).isTrue();
+        assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isNull();
+        status(call(engineer, "PATCH", path, body, key(), version(1)), 409);
+        status(call(admin, "PATCH", path, Map.of("name", "Account", "description", "😀".repeat(500)), key(), version(2)), 200);
+        for (var invalid : List.of(json.readTree("{\"name\":\"Bad\",\"description\":null}"),
+            json.readTree("{\"name\":\"Bad\",\"description\":42}"),
+            json.valueToTree(Map.of("name", "Bad", "description", "😀".repeat(501))))) {
+            status(call(admin, "PATCH", path, invalid, key(), version(3)), 400);
+            status(call(admin, "POST", endpoint, invalid, key(), null), 400);
+        }
+        assertThat(db.queryForObject("SELECT version FROM ticket_type WHERE id=?", Long.class, id)).isEqualTo(3L);
+    }
+
+    @Test void oldNameOnlyTypeCreateAndUpdateHashesStillReplay() throws Exception {
+        UUID id = TicketTypeTestSupport.type(db, "Legacy type");
+        db.update("UPDATE ticket_type SET description='Keep description',version=1 WHERE id=?", id);
+        String createKey = key(), updateKey = key();
+        for (var operation : List.of("POST /api/v1/ticket-types", "PATCH /api/v1/ticket-types/" + id)) {
+            String v = operation.startsWith("POST") ? null : version(0);
+            String requestKey = operation.startsWith("POST") ? createKey : updateKey;
+            String hash = com.openitsm.common.utils.TokenCodec.hash("{\"name\":\"Legacy type\"}\n" + v);
+            db.update("INSERT INTO idempotency_record(actor_id,operation,key,request_hash,state,resource_id,accepted_version,response_status,created_at) VALUES (?,?,?,?,'SUCCESS',?,?,?,?)",
+                engineerId, operation, UUID.fromString(requestKey), hash, id, operation.startsWith("POST") ? 0 : 1, operation.startsWith("POST") ? 201 : 200, java.sql.Timestamp.from(clock.instant()));
+        }
+        var created = call(engineer, "POST", "/api/v1/ticket-types", Map.of("name", "Legacy type"), createKey, null);
+        status(created, 201); assertThat(data(created).path("replayed").asBoolean()).isTrue();
+        var updated = call(engineer, "PATCH", "/api/v1/ticket-types/" + id, Map.of("name", "Legacy type"), updateKey, version(0));
+        status(updated, 200); assertThat(data(updated).path("replayed").asBoolean()).isTrue();
+        assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Keep description");
+        assertThat(db.queryForObject("SELECT version FROM ticket_type WHERE id=?", Long.class, id)).isEqualTo(1L);
+    }
+
     @Test void typesEnforceCreatorPermissionsRenameHistoryAndPreserveSuccessfulReplayAfterRemoval() throws Exception {
         String typeKey = key(); var typeResponse = call(engineer, "POST", "/api/v1/ticket-types", Map.of("name", "Network"), typeKey, null);
         status(typeResponse, 201); UUID type = UUID.fromString(data(typeResponse).path("id").asText());
@@ -331,6 +382,23 @@ class ModuleExtensionsHttpTest {
         assertThat(data(replay).path("replayed").asBoolean()).isTrue();
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(1);
         status(call(employee, "POST", "/api/v1/tickets", original, key(), null), 400);
+    }
+
+    @Test void v14UpgradeAddsNullableDescriptionWithoutChangingTypesOrTickets() {
+        String schema = "type_description_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        var config = org.flywaydb.core.Flyway.configure().dataSource(db.getDataSource()).schemas(schema).defaultSchema(schema);
+        config.target("14").load().migrate();
+        UUID actor = UUID.randomUUID(), type = UUID.randomUUID(), ticket = UUID.randomUUID();
+        db.update("INSERT INTO " + schema + ".app_user(id,email_normalized,name,role,status) VALUES (?,'old@example.com','Old','EMPLOYEE','INVITED')", actor);
+        db.update("INSERT INTO " + schema + ".ticket_type(id,name,active,version) VALUES (?,'Legacy',false,3)", type);
+        db.update("INSERT INTO " + schema + ".ticket(id,requester_id,title,description,business_type,business_type_id,impact_scope) VALUES (?,?,'Old','Original','Legacy',?,'Team')", ticket, actor, type);
+        var beforeTypes = db.queryForList("SELECT id,name,active,version FROM " + schema + ".ticket_type");
+        var beforeTickets = db.queryForList("SELECT id,business_type_id,description FROM " + schema + ".ticket");
+        assertThat(config.target("15").load().migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(db.queryForList("SELECT id,name,active,version FROM " + schema + ".ticket_type")).isEqualTo(beforeTypes);
+        assertThat(db.queryForList("SELECT id,business_type_id,description FROM " + schema + ".ticket")).isEqualTo(beforeTickets);
+        assertThat(db.queryForObject("SELECT count(*) FROM " + schema + ".ticket_type WHERE description IS NULL", Integer.class)).isEqualTo(1);
+        assertThat(config.target("15").load().migrate().migrationsExecuted).isZero();
     }
 
     @Test void v9UpgradeMapsExactLegacyTypesWithoutChangingOriginalFields() {

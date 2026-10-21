@@ -32,7 +32,7 @@ public class TicketTypeServiceImpl implements TicketTypeService {
         boolean manage = "MANAGE".equals(view);
         if (manage && "EMPLOYEE".equals(context.user().role)) throw forbidden();
         return types.selectList(new QueryWrapper<TicketTypeEntity>().eq("active", true).orderByAsc("name", "id")).stream()
-            .map(type -> new TicketTypeVO(type.id, type.name, manage ? type.version : null,
+            .map(type -> new TicketTypeVO(type.id, type.name, type.description, manage ? type.version : null,
                 manage ? ("ADMIN".equals(context.user().role) || context.user().id.equals(type.creatorId)) : null)).toList();
     }
     private void actor(AuthContext context) {
@@ -45,6 +45,7 @@ public class TicketTypeServiceImpl implements TicketTypeService {
     @Transactional
     public com.openitsm.vo.CreatedTicketTypeVO create(AuthContext context, SaveTicketTypeRequest body, String key) {
         String name = requiredName(body);
+        String description = description(body);
         var requestKey = idem.key(key); var actorId = context.user().id;
         String operation = "POST /api/v1/ticket-types", hash = idem.hash(body, null);
         idem.reserve(actorId, operation, requestKey); actor(context);
@@ -53,6 +54,7 @@ public class TicketTypeServiceImpl implements TicketTypeService {
             return new com.openitsm.vo.CreatedTicketTypeVO(previous.resourceId(), name, previous.acceptedVersion(), true);
         }
         var type = new TicketTypeEntity(); type.id = UUID.randomUUID(); type.name = name; type.creatorId = actorId;
+        type.description = description;
         types.insert(type); sessions.touch(context.session().hash());
         idem.save(actorId, operation, requestKey, hash, type.id, type.version, 201);
         return new com.openitsm.vo.CreatedTicketTypeVO(type.id, type.name, type.version, false);
@@ -61,6 +63,7 @@ public class TicketTypeServiceImpl implements TicketTypeService {
     public ActionVO change(AuthContext context, UUID id, SaveTicketTypeRequest body, String version, String key) {
         long expected = Values.version(version);
         String name = body == null ? null : requiredName(body);
+        String description = description(body);
         String operation = (body == null ? "DELETE " : "PATCH ") + "/api/v1/ticket-types/" + id;
         var requestKey = idem.key(key); var actorId = context.user().id; String hash = idem.hash(body, version);
         idem.reserve(actorId, operation, requestKey); actor(context);
@@ -71,6 +74,7 @@ public class TicketTypeServiceImpl implements TicketTypeService {
         if (!"ADMIN".equals(context.user().role) && !actorId.equals(type.creatorId)) throw forbidden();
         if (type.version != expected) throw new BusinessException(409, "VERSION_CONFLICT", "类型已更新，请刷新后重新确认");
         if (body == null) type.active = false; else type.name = name;
+        if (body != null && body.description() != null) type.description = description;
         type.version++; types.updateById(type); sessions.touch(context.session().hash());
         return idem.save(actorId, operation, requestKey, hash, id, type.version, 200);
     }
@@ -79,4 +83,11 @@ public class TicketTypeServiceImpl implements TicketTypeService {
         return body.name().strip();
     }
     private BusinessException forbidden() { return new BusinessException(403, "FORBIDDEN", "无操作权限"); }
+    private String description(SaveTicketTypeRequest body) {
+        if (body == null || body.description() == null) return null;
+        String value = body.description().strip();
+        if (value.codePointCount(0, value.length()) > 500)
+            throw BusinessException.field("description", "说明最多 500 字");
+        return value.isEmpty() ? null : value;
+    }
 }

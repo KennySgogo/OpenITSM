@@ -5,6 +5,7 @@ import ErrorNotice from '../components/ErrorNotice.vue';
 import TicketActions from '../components/TicketActions.vue';
 import TicketCommunication from '../components/TicketCommunication.vue';
 import TicketAttachments from '../components/TicketAttachments.vue';
+import TicketClassification from '../components/TicketClassification.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels } from '../types/ApiTypes';
@@ -15,6 +16,7 @@ const ticket = ref<Ticket>();
 const actionLocked = ref(false);
 const communicationLocked = ref(false);
 const attachmentLocked = ref(false);
+const classificationLocked = ref(false);
 let sequence = 0;
 onUnmounted(() => { sequence++; });
 async function load(keepTicket = false) {
@@ -32,7 +34,7 @@ watch(() => route.params.id, () => load(), { immediate: true });
 </script>
 
 <template>
-  <div class="page-heading"><div><span class="eyebrow">服务工单</span><h1>{{ ticket?.number ?? '工单详情' }}</h1></div><ElButton :disabled="blocked || actionLocked || communicationLocked || attachmentLocked" @click="load(true)">刷新详情与时限</ElButton><RouterLink to="/tickets?view=MINE"><ElButton>返回我的工单</ElButton></RouterLink></div>
+  <div class="page-heading"><div><span class="eyebrow">服务工单</span><h1>{{ ticket?.number ?? '工单详情' }}</h1></div><ElButton :disabled="blocked || actionLocked || communicationLocked || attachmentLocked || classificationLocked" @click="load(true)">刷新详情</ElButton><RouterLink to="/tickets?view=MINE"><ElButton>返回我的工单</ElButton></RouterLink></div>
   <ErrorNotice :error="error" />
   <div v-if="error" class="detail-retry"><ElButton :disabled="blocked" @click="load()">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '重新加载' }}</ElButton></div>
   <section v-loading="busy" class="ticket-detail">
@@ -48,9 +50,10 @@ watch(() => route.params.id, () => load(), { immediate: true });
       <template v-if="ticket.resolutionSummary"><h3>解决摘要</h3><p class="ticket-text">{{ ticket.resolutionSummary }}</p></template>
     </template>
   </section>
-  <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
-  <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="communicationLocked || attachmentLocked" @lock="actionLocked = $event" @refresh="load(true)" />
-  <TicketCommunication v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || attachmentLocked" @lock="communicationLocked = $event" @refresh="load(true)" />
+  <TicketClassification v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked || attachmentLocked" @lock="classificationLocked = $event" @refresh="load(true)" />
+  <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked || classificationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
+  <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="communicationLocked || attachmentLocked || classificationLocked" @lock="actionLocked = $event" @refresh="load(true)" />
+  <TicketCommunication v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || attachmentLocked || classificationLocked" @lock="communicationLocked = $event" @refresh="load(true)" />
 </template>
 
 <style scoped>

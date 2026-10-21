@@ -6,6 +6,7 @@ import com.openitsm.dto.AssignTicketRequest;
 import com.openitsm.dto.TicketReasonRequest;
 import com.openitsm.dto.ResolveTicketRequest;
 import com.openitsm.dto.ChangeTicketPriorityRequest;
+import com.openitsm.dto.ConfirmTicketClassificationRequest;
 import com.openitsm.common.utils.Values;
 import com.openitsm.entity.TicketEntity;
 import com.openitsm.mapper.TicketMapper;
@@ -210,6 +211,8 @@ public class TicketServiceImpl implements TicketService {
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
         var target = body instanceof AssignTicketRequest assignment && assignment.assigneeId() != null
             ? users.lock(assignment.assigneeId()) : null;
+        var classificationType = body instanceof ConfirmTicketClassificationRequest classification
+            ? types.lock(classification.businessTypeId()) : null;
         TicketEntity ticket = tickets.lock(id);
         if (ticket == null || ("EMPLOYEE".equals(actor.role) && !actorId.equals(ticket.requesterId)))
             throw new BusinessException(404, "RESOURCE_NOT_FOUND", "工单不存在或不可访问");
@@ -286,13 +289,24 @@ public class TicketServiceImpl implements TicketService {
                     throw BusinessException.field("priority", "请选择 P1～P4 优先级");
                 reason = requiredText(reason, "reason"); ticket.priority = priority;
             }
+            case "classifications" -> {
+                requireState(ticket, "NEW", "IN_PROGRESS", "ON_HOLD");
+                requirePermission(admin || owner || ("NEW".equals(ticket.status) && requester));
+                if (classificationType == null || !classificationType.active)
+                    throw BusinessException.field("businessTypeId", "类型已失效，请重新选择");
+                before.put("businessTypeId", ticket.businessTypeId);
+                ticket.businessTypeId = classificationType.id;
+                ticket.businessType = classificationType.name;
+            }
             default -> throw new IllegalArgumentException("Unknown ticket action");
         }
         ticket.version++;
         tickets.updateById(ticket);
+        var after = snapshot(ticket);
+        if ("classifications".equals(action)) after.put("businessTypeId", ticket.businessTypeId);
         audit.appendTicket(actorId, "TICKET_" + action.toUpperCase(Locale.ROOT).replace('-', '_'), id,
-            Map.of("before", before, "after", snapshot(ticket)), reason, requestId);
-        notifications.enqueue(ticket, actorId, action);
+            Map.of("before", before, "after", after), reason, requestId);
+        if (!"classifications".equals(action)) notifications.enqueue(ticket, actorId, action);
         sessions.touch(context.session().hash());
         return idem.save(actorId, operation, key, hash, id, ticket.version, 200);
     }

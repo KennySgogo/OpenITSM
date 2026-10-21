@@ -7,7 +7,11 @@ import com.openitsm.dto.AssignTicketRequest;
 import com.openitsm.dto.TicketReasonRequest;
 import com.openitsm.dto.ResolveTicketRequest;
 import com.openitsm.dto.ChangeTicketPriorityRequest;
+import com.openitsm.dto.ConfirmTicketClassificationRequest;
+import com.openitsm.common.exception.BusinessException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.openitsm.service.TicketService;
+import com.openitsm.service.ClassificationSuggestionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,8 +30,11 @@ import java.util.UUID;
 @RequestMapping("/api/v1/tickets")
 public class TicketController {
     private final TicketService service;
+    private final ClassificationSuggestionService suggestions;
 
-    public TicketController(TicketService service) { this.service = service; }
+    public TicketController(TicketService service, ClassificationSuggestionService suggestions) {
+        this.service = service; this.suggestions = suggestions;
+    }
 
     @GetMapping
     public ApiResponse<?> list(@RequestParam(required = false) String view, @RequestParam(required = false) String page,
@@ -87,6 +94,27 @@ public class TicketController {
         @RequestHeader(value = "If-Match", required = false) String version,
         @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
         return change(id, body, version, key, request);
+    }
+
+    @PostMapping("/{id}/classifications")
+    public ResponseEntity<?> classification(@PathVariable UUID id, @RequestBody JsonNode body,
+        @RequestHeader(value = "If-Match", required = false) String version,
+        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
+        if (body == null || !body.isObject() || body.size() != 1 || !body.path("businessTypeId").isTextual())
+            throw BusinessException.field("businessTypeId", "请仅提交已有业务类型 ID");
+        String raw = body.path("businessTypeId").textValue();
+        UUID typeId;
+        try { typeId = UUID.fromString(raw); }
+        catch (IllegalArgumentException ex) { throw BusinessException.field("businessTypeId", "业务类型 ID 无效"); }
+        if (!raw.equalsIgnoreCase(typeId.toString())) throw BusinessException.field("businessTypeId", "业务类型 ID 无效");
+        return change(id, new ConfirmTicketClassificationRequest(typeId), version, key, request);
+    }
+
+    @PostMapping("/{id}/ai/classification-suggestions")
+    public ApiResponse<?> classificationSuggestion(@PathVariable UUID id,
+        @RequestBody(required = false) Map<String, Object> body, HttpServletRequest request) {
+        RequestAuthentication.emptyBody(body);
+        return ApiResponse.of(request, suggestions.suggest(RequestAuthentication.from(request), id));
     }
 
     private ResponseEntity<?> change(UUID id, Object body, String version, String key, HttpServletRequest request) {

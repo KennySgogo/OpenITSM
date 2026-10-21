@@ -150,3 +150,17 @@ HTTP 测试支持可选进程变量 OPENITSM_FRONTEND_BROWSER_HOLD_SECONDS，最
 - 员工登录后无管理导航，直接访问 /settings 显示无访问权限；员工工单列表仍可用。预期 409/429 为验收主动触发，未发现页面脚本异常。
 - 截图：m14-settings-success.jpg、m14-cooldown-isolation.jpg、m14-version-conflict.jpg、m14-employee-denied.jpg。前端 `npm test` 20 项通过，vue-tsc 与 Vite 构建通过，保留既有主包体积告警。
 - 验收结束释放夹具并停止临时 JAR/Python/Vite；不将本机测试服务成功视为真实供应商可用或真实邮箱送达。M01～M08 其他新增页面的完整验收不由本记录替代。
+# M09 浏览器验收（2026-10-21）
+
+- 独立 JAR、真实 Python、本机模型接收器及隔离 Testcontainers PostgreSQL 联通；Vite 使用 `http://localhost:5189` 代理独立后端，前后端健康入口返回 200。
+- 应用内浏览器使用隔离员工账号登录，打开测试工单，生成已有类型建议，页面显示“建议尚未生效”、类型、理由和 P2 建议；工单原优先级仍为 P3。
+- 人工类型切换的页面提交遇到限时后端夹具退出，前端显示“服务响应无法解析”；该浏览器步骤未验收通过。人工确认的独立 JAR 接口和真实 PostgreSQL 集成测试已通过。初次以 127.0.0.1 访问时与后端允许的 localhost Origin 不一致，改用 localhost 后登录成功。本机模型接收器不代表真实供应商。
+
+## M09 补齐阶段 A：类型说明（2026-10-21）
+
+- 最终后端全量 160 项通过；Python 12 项、前端 20 项、vue-tsc 与 Vite 构建通过，保留原包体积提示。独立最终 JAR、真实 Python 与本机模型接收器验证类型说明到达模型输入；日志 source/backend/target/m09-stage-a-final-regression.log、m09-stage-a-final-packaged.log。
+- 使用隔离 Testcontainers PostgreSQL，临时 Vite localhost:5189 代理独立 JAR；夹具保留至页面结束后显式释放，未在本机业务库创建验收账号、类型或工单。
+- 管理员编辑类型的中文多行说明，列表回显；员工提单选择该类型后显示说明，并成功创建 ITSM-2。详情人工确认其他类型成功，优先级仍 P3；补齐上次未完成的浏览器人工确认步骤。另修正分类审计查询白名单和中文标签，并在最终 JAR 页面确认操作事件显示。
+- 员工直接进入类型管理页被拒绝；工程师可创建含说明的自有类型，仅自有行出现编辑/移除按钮。输入 501 字显示“说明最多 500 字”且保存禁用，清空说明后成功保存为“暂无说明”。
+- 截图：m09-a-type-description.png、m09-a-create-description.png、m09-a-manual-confirm.png、m09-a-history-final.png。最终页面无脚本错误。临时 Vite/独立 JAR/Python/测试数据库夹具已停止；默认 5173/8080/8001 服务继续运行阶段 A 版本。
+- 阶段 B 结构化输出和阶段 C 提单前建议仍待实施；本机模型接收器不证明真实供应商的分类质量。

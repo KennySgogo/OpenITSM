@@ -7,6 +7,7 @@ import java.util.UUID;
 public class TicketTypeEntity {
     @TableId(type = IdType.INPUT) public UUID id;
     public String name;
+    @TableField(updateStrategy = FieldStrategy.ALWAYS) public String description;
     public UUID creatorId;
     public boolean active = true;
     public long version;

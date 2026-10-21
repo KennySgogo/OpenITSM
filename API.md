@@ -1,11 +1,11 @@
 # OpenITSM API
 
-面向前端的接口文档。M01～M08 下列契约已接入源码，新增能力尚待数据库、独立启动及浏览器验收，实际结果见 STATUS。M09～M14 的 AI 与设置仍按设计稿维护；M13 统计接口随 M07 接入。
+面向前端的接口文档。M01～M09 下列契约已接入源码，实际验收边界见 STATUS。M10～M12 仍按设计稿维护；M13 统计接口随 M07 接入，M14 设置已接入。
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
 - 接口前缀：`/api/v1`（健康检查除外）
 - 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/附件/操作记录（M04 前后端）、列表详情与检索（M05 前后端）、简单统计（M07/M13）
-- M06 已接入账号邮件与工单通知的后台投递；M08 已实现，M09～M12、M14 仍为设计稿，M13 统计已接入。
+- M06 已接入账号邮件与工单通知的后台投递；M08、M09、M14 已接入，M10～M12 仍为设计稿，M13 统计已接入。
 
 ## 通用约定
 
@@ -289,7 +289,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | POST | /api/v1/tickets | 创建工单 | 全角色 |
 | GET | /api/v1/ticket-types | 可选类型；view=MANAGE 管理列表 | 默认全角色；MANAGE 仅处理角色 |
 | POST | /api/v1/ticket-types | 创建类型 | 工程师、管理员 |
-| PATCH | /api/v1/ticket-types/{id} | 类型改名 | 创建者工程师、管理员 |
+| PATCH | /api/v1/ticket-types/{id} | 编辑类型名称和说明 | 创建者工程师、管理员 |
 | DELETE | /api/v1/ticket-types/{id} | 从新提单选项移除 | 创建者工程师、管理员 |
 
 - 创建正文：title、description、impactScope 为非空字符串；businessTypeId 为有效类型 UUID；priority 可选 P1～P4，省略 P3；assigneeId 可选单个 ACTIVE ENGINEER/ADMIN 的 UUID，省略或 null 不指定。提单人取会话，不接受 requesterId/status。正文保持纯文本，总限制 256 KiB。
@@ -298,6 +298,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 新请求不再接受自由文本 businessType 创建类型；升级前已成功的四字段请求仍按原摘要重放，类型改名或移除不影响其重放。未知结果保留原内容、版本及键，不以修改正文猜测结果。
 - GET 类型 data.items 默认含 id/name；MANAGE 另含 version/canManage，列表只含有效类型，canManage 不代表新增授权。创建/改名正文 name 为去首尾空白后的非空字符串。创建需键，201 返回 id/name/version/replayed；改名/移除同时需 If-Match/键，200 返回 resourceId/acceptedVersion/replayed 及 ETag。越权 403，不存在或已移除 404，版本/幂等沿用通用错误。
 - 类型移除保留记录与历史关联；改名后历史展示读取现名。旧工单类型按精确文本去重迁入，creatorId 为空的初始类型仅管理员可管理；没有旧数据不预置类型。
+- 类型列表增加可选 description，纯文本、去首尾空白后最多 500 字。创建和更新正文增加选填 description：创建省略表示无说明，更新省略保留，显式空串清除，null 或非字符串拒绝；更新仍需 name。无说明时列表省略此字段。name-only 旧成功请求保持原幂等摘要和重放结果。
 
 功能链路：读取统一类型和候选 → 填写表单、确认可选负责人和优先级 → 创建并显示编号/详情入口 → 逐个复用 M04 上传已选附件。每个文件独立版本及幂等键，工单已成功时只重试未成功附件，不重新建单；未知上传保留原文件/版本/键，明确冲突刷新后由用户确认。文件只在当前页保留。建单前 AI 推荐依赖 M10，本次未接入。
 
@@ -469,7 +470,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 - 附件修订（已接入，待运行验收）：已发布文章 → 管理员下架 → 仅作者工程师/管理员可读 → 作者工程师上传或逻辑移除 → 保存更新版本 → 管理员重新发布；被移除文件保留存储但不再可下载。
 - 附件失败重试（已接入，待运行验收）：上传失败或未知 → 保留 File、文章原版本和键 → 按原请求确认结果 → 明确冲突时刷新并由用户确认 → 成功后才进入发布流程，不把本地待上传文件列为已发布附件。
 
-### M09 AI 业务类型建议（未实现）
+### M09 AI 业务类型建议（已接入，页面验收待完成）
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -479,14 +480,14 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 参数要点：
 
 - 建议接口返回的均为建议值，不直接生效；分类即 businessTypeId，不再增加平行分类或标签。
-- classifications 拟仅含确认后的 businessTypeId，不能写入 priority；优先级建议由管理员通过 M03 priority-changes 确认并填写原因，其他角色不得绕过。类型只能选已有可用项，AI 不自动创建类型。
+- classifications 仅含确认后的 businessTypeId，不能写入 priority；优先级建议由管理员通过 M03 priority-changes 确认并填写原因，其他角色不得绕过。类型只能选已有可用项，AI 不自动创建类型。
 - AI 不可用或已关闭（M14）时不影响人工提单与处理。
 
-拟修改契约：
+已实现契约：
 
 - 已确认取消标签及独立分类字段；M09 复用 M02 业务类型选项，管理权限不因 AI 请求扩大。NEW 限提单人、当前负责人或管理员，IN_PROGRESS/ON_HOLD 限当前负责人或管理员；RESOLVED/CLOSED/REJECTED 禁止类型写入及本入口建议请求。操作角色和目标状态在服务端检查，不仅隐藏按钮。
 - classifications 正文仅 businessTypeId（必填 UUID），需 If-Match/Idempotency-Key；同事务更新类型、version、TICKET_CLASSIFICATIONS 审计及成功幂等记录，状态、负责人、优先级不变且不触发邮件。成功 200，返回现有 resourceId/acceptedVersion/replayed 与 ETag；不可见 404、无权限 403、状态不允许 409、版本/幂等冲突沿用通用规则，类型不存在/不可用或字段非法 400。类型提交前失效则整次失败，不静默改为其他类型；原成功请求重放不重复写入。
-- classification-suggestions 不接受客户端工单正文或自定义类型集合，由 Java 按路径工单取公开问题字段与可用类型；本接口不写业务字段，不要求 If-Match。建议响应拟含 businessTypeId、reason、suggestedPriority，前两者可为空表示无可用建议，优先级建议仅 P1～P4 或 null；前端明确“建议尚未生效”。AI 重试与错误遵循 M14 共用约定，本版无每日次数额度，不用 suggestions 接口代替类型管理。
+- classification-suggestions 不接受客户端工单正文或自定义类型集合，由 Java 按路径工单取公开问题字段与可用类型；本接口不写业务字段，不要求 If-Match。建议响应含 businessTypeId、reason、suggestedPriority，前两者可为空表示无可用建议，优先级建议仅 P1～P4 或 null；前端明确“建议尚未生效”。AI 重试与错误遵循 M14 共用约定，本版无每日次数额度，不用 suggestions 接口代替类型管理。
 - AI 输入仅使用经授权的工单公开问题信息及可用类型选项，不读内部备注或任何附件。输出候选类型与简短依据、可选优先级建议；Java 过滤非法/失效类型、拒绝非预期字段，建议不更新工单或版本。
 
 功能链路（尚未实现）：
@@ -618,7 +619,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 - 纯计算建议/检索/草稿请求使用既有会话、Origin 和 CSRF，不要求 If-Match 或业务 Idempotency-Key；不写工单版本。人工应用业务类型、分派、回复仍各自带版本与幂等键。页面提交中禁止重复点击，失败由用户主动重试，不自动重试外部生成；重新生成是新计算，不承诺恢复原草稿或原建议。
-- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。M14 已提供配置读取、开关重验及测试错误映射；M09～M12 业务接口尚未实现，不会返回成功或伪造数据；不将错误伪装成空结果。
+- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。M09 已接入配置与权限重验；M10～M12 业务接口尚未实现，不将错误伪装成空结果。
 - Java 和 Python 设置有限连接/读写/总等待并及时取消，具体传输值在部署接入时校验；只回传可公开的错误说明，不回显密钥或原始供应商异常。AI 关闭阻止后续业务调用，已在途结果返回前重验开关/权限，关闭后不自动应用结果；管理员连接测试是独立例外。
 
 功能链路：
@@ -637,7 +638,7 @@ M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 ## 内部接口（Java → Python，M09～M12 及 M14 模型测试）
 
-以下接口由 Java 后端调用 Python AI 服务，浏览器不可直接访问；不适用本文档的浏览器会话和统一响应包装。M14 固定文本测试已接入；M09～M12 仍为设计契约，材料范围和输出限制遵循对应模块，不可绕过 Java 权限和输出过滤。
+以下接口由 Java 后端调用 Python AI 服务，浏览器不可直接访问；不适用本文档的浏览器会话和统一响应包装。M14 固定文本测试与 M09 类型建议已接入；M10～M12 仍为设计契约，材料范围和输出限制遵循对应模块，不可绕过 Java 权限和输出过滤。
 
 | 方法 | 路径 | 用途 | 对应前端接口 |
 | --- | --- | --- | --- |

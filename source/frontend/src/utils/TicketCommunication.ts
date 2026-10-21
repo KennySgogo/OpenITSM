@@ -8,6 +8,7 @@ export function canReply(ticket: Ticket, user: Pick<User, 'id' | 'role'>, intern
 }
 
 const labels: Record<string, string> = {
+  TICKET_CLASSIFICATIONS: '确认业务类型',
   TICKET_REJECTIONS: '拒绝工单',
   TICKET_CLAIM: '认领 / 受理', TICKET_ASSIGNMENTS: '分派', TICKET_TRANSFERS: '转派',
   TICKET_SUSPENSIONS: '挂起', TICKET_RESUME: '恢复', TICKET_RESOLUTIONS: '解决',

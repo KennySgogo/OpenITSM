@@ -6,7 +6,7 @@ import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { sessionState } from '../stores/SessionStore';
 import type { Ticket, TicketAction, Assignee } from '../types/ApiTypes';
-import type { CreatedTicket, CreateTicketRequest } from '../types/ApiTypes';
+import type { CreatedTicket, CreateTicketRequest, TicketTypeOption } from '../types/ApiTypes';
 
 const { error, busy, blocked, waitSeconds, showError } = useFeedback();
 const form = ref<FormInstance>();
@@ -18,7 +18,8 @@ const rules: FormRules = Object.fromEntries([
   ['businessTypeId', '请选择业务类型'], ['impactScope', '请输入影响范围']
 ].map(([field, message]) => [field, [{ required: true, whitespace: true, message, trigger: 'blur' }]]));
 
-const types = ref<{ id: string; name: string }[]>([]);
+const types = ref<TicketTypeOption[]>([]);
+const selectedType = computed(() => types.value.find(type => type.id === model.businessTypeId));
 const assignees = ref<Assignee[]>([]);
 const candidateMessage = ref('');
 const staff = computed(() => sessionState.session?.user.role !== 'EMPLOYEE');
@@ -26,7 +27,7 @@ interface Upload { file: File; visibility: string; done: boolean; error: string;
 const uploads = ref<Upload[]>([]);
 const uploadBusy = ref(false);
 async function loadOptions() {
-  try { types.value = (await request<{ items: { id: string; name: string }[] }>('/ticket-types')).items; }
+  try { types.value = (await request<{ items: TicketTypeOption[] }>('/ticket-types')).items; }
   catch (value) { showError(value); }
   try { assignees.value = (await request<{ items: Assignee[] }>('/users/assignees')).items; }
   catch { candidateMessage.value = '负责人暂时无法加载，仍可不指定提交。'; }
@@ -105,6 +106,7 @@ function another() {
         <ElFormItem label="标题" prop="title"><ElInput v-model="model.title" placeholder="简要描述遇到的问题" /></ElFormItem>
         <ElFormItem label="问题描述" prop="description"><ElInput v-model="model.description" type="textarea" :rows="7" placeholder="请说明问题现象、发生时间及已尝试的操作" /></ElFormItem>
         <div class="ticket-fields"><ElFormItem label="业务类型" prop="businessTypeId"><ElSelect v-model="model.businessTypeId" placeholder="请选择业务类型"><ElOption v-for="type in types" :key="type.id" :label="type.name" :value="type.id" /></ElSelect><RouterLink v-if="staff" to="/ticket-types">管理业务类型</RouterLink><ElButton text @click="loadOptions">刷新选项</ElButton></ElFormItem><ElFormItem label="影响范围" prop="impactScope"><ElInput v-model="model.impactScope" placeholder="说明受影响的人员或业务范围" /></ElFormItem></div>
+        <p v-if="selectedType" class="selected-type-description">业务说明：{{ selectedType.description || '暂无说明' }}</p>
         <ElFormItem label="初始优先级"><ElSelect v-model="model.priority"><ElOption v-for="value in ['P1','P2','P3','P4']" :key="value" :value="value" :label="value" /></ElSelect></ElFormItem>
         <ElFormItem label="负责人（可不指定）"><ElSelect v-model="model.assigneeId" clearable placeholder="进入未分派队列"><ElOption v-for="user in assignees" :key="user.id" :value="user.id" :label="user.name" /></ElSelect><p>{{ candidateMessage }}</p></ElFormItem>
         <ElFormItem label="附件（单个不超过 10 MiB）"><input type="file" multiple :disabled="busy || !!pending" @change="selectFiles" /></ElFormItem>
@@ -123,5 +125,6 @@ function another() {
 .another-ticket { margin-left: 12px; }
 .ticket-receipt { overflow-wrap: anywhere; line-height: 1.8; }
 .ticket-receipt p + p { color: #8a97ab; font-size: 12px; }
+.selected-type-description { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; margin: 0 0 20px; }
 @media (max-width: 700px) { .ticket-fields { grid-template-columns: 1fr; gap: 0; } .ticket-card { padding: 20px; } }
 </style>

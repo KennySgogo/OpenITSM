@@ -160,6 +160,8 @@ BrowserSecurityFilter 仅对精确工单/知识上传路径的 POST 放行 multi
 
 M09 已确认只使用业务类型，不增加平行分类或标签表/接口。Java 负责 NEW 提单人/负责人/管理员、IN_PROGRESS/ON_HOLD 负责人/管理员的权限状态检查；建议不写入，人工类型确认复用 TicketService 的成员→类型→工单协调、版本、幂等与审计。RESOLVED/CLOSED/REJECTED 不可修改；与受理、解决、转派及类型停用并发时必须最终重验。优先级继续走管理员专属 M03 动作，不通过分类接口绕过。
 
+V15 为 ticket_type 新增可空 description，历史行保持空值；类型读写复用原 Service/Mapper 和权限。省略说明的旧 name-only 请求保持原序列化幂等摘要；空串清除通过 ALWAYS 策略写入 null。类型候选向 Python 同步提供可选说明，仍不发送内部备注或附件。
+
 ### AI 检索与草稿计算（拟实现）
 
 M11/M12 继续使用 Java 取得和授权材料、Python 只做相关性及文本计算的边界。M11 的候选先从现有 PostgreSQL 及 Mapper 按公开问题信息检索，再交 Python 判断相关性；只允许真实已解决/关闭工单与已发布知识，返回前复核状态和来源 ID，不引入外部向量库或自动知识沉淀。具体候选召回与排序需在实现时用真实样本验证，源码阅读不能证明检索质量。
@@ -312,7 +314,7 @@ local 配置通过 Spring Boot Config Data 导入本机 `.env` properties 文件
 
 ### M14 Python 运行与配置持久化
 
-按用户指定复用本机 uv 管理的 Python 3.12.15，不另装新版解释器。source/ai-service 使用 pyproject.toml、uv.lock 与项目 .venv；运行版本范围 >=3.12,<3.14，此调整不改变 Java/Python 职责，也无历史 Python 服务迁移。app/main.py 仅提供固定文本模型连接测试；无数据库、脚本执行或 M09～M12 占位接口。
+按用户指定复用本机 uv 管理的 Python 3.12.15，不另装新版解释器。source/ai-service 使用 pyproject.toml、uv.lock 与项目 .venv；运行版本范围 >=3.12,<3.14，此调整不改变 Java/Python 职责，也无历史 Python 服务迁移。app/main.py 提供固定文本模型连接测试与 M09 类型建议计算；无数据库、脚本执行或 M10～M12 占位接口。
 
 V14 新增单例 team_settings 和独立 ai_connection_status；配置保存、版本、成功幂等结果同事务提交。测试编排使用短事务完成管理员/会话校验、限频及 RUNNING 记录，再在事务外等待 Python，最后以 attempt_id 条件更新结果并重验权限；状态更新不递增配置版本，旧尝试不能覆盖更新尝试。显式清除用 MyBatis ALWAYS 更新空值，避免 null 被忽略而恢复旧凭据。
 

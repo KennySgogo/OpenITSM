@@ -65,6 +65,10 @@ export interface Ticket {
 }
 export interface TicketPage { items: Ticket[]; page: number; pageSize: number; total: number }
 export interface TicketAction { resourceId: string; acceptedVersion: number; replayed: boolean }
+export interface ClassificationSuggestion {
+  businessTypeId: string | null; reason: string | null; suggestedPriority: 'P1' | 'P2' | 'P3' | 'P4' | null;
+}
+export interface TicketTypeOption { id: string; name: string; description?: string }
 export interface TicketReply {
   id: string; content: string; visibility: 'PUBLIC' | 'INTERNAL';
   authorId: string; authorName: string; createdAt: string;
