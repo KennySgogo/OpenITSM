@@ -10,9 +10,12 @@ import org.springframework.stereotype.Service;
 public class HealthServiceImpl implements HealthService {
     private final HealthMapper mapper;
     private final TicketAttachmentService attachments;
-    public HealthServiceImpl(HealthMapper mapper, TicketAttachmentService attachments) { this.mapper = mapper; this.attachments = attachments; }
+    private final com.openitsm.service.KnowledgeAttachmentService knowledgeAttachments;
+    public HealthServiceImpl(HealthMapper mapper, TicketAttachmentService attachments, com.openitsm.service.KnowledgeAttachmentService knowledgeAttachments) {
+        this.mapper = mapper; this.attachments = attachments; this.knowledgeAttachments = knowledgeAttachments;
+    }
     public boolean ready() {
-        try { mapper.ping(); return attachments.storageReady(); }
+        try { mapper.ping(); return attachments.storageReady() && knowledgeAttachments.storageReady(); }
         catch (DataAccessException ex) { return false; }
     }
 }

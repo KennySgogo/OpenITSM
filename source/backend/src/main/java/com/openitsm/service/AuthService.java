@@ -6,6 +6,7 @@ import com.openitsm.vo.SessionVO;
 import java.util.UUID;
 
 public interface AuthService {
+    void changePassword(AuthContext context, com.openitsm.dto.ChangePasswordRequest body, UUID requestId, String source);
     LoginSession authenticate(String email, String password, String oldHash, String source);
     void requestResetFromSource(String email, String source);
     void consumeFromSource(String raw, String password, String purpose, UUID requestId, String source);

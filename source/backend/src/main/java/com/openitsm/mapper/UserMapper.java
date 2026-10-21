@@ -13,13 +13,14 @@ public interface UserMapper extends BaseMapper<UserEntity> {
     @Select("SELECT * FROM app_user WHERE email_normalized=#{email} FOR UPDATE")
     UserEntity lockEmail(@Param("email") String email);
 
-    @Select("SELECT * FROM app_user WHERE id=#{id} FOR UPDATE")
+    // Serialize member changes and delivery, while allowing other transactions' FK KEY SHARE locks.
+    @Select("SELECT * FROM app_user WHERE id=#{id} FOR NO KEY UPDATE")
     UserEntity lock(@Param("id") UUID id);
 
     @Select("SELECT count(*) FROM app_user WHERE role='ADMIN' AND status='ACTIVE'")
     int activeAdmins();
 
-    @Select("SELECT * FROM app_user WHERE role='ENGINEER' AND status='ACTIVE' ORDER BY name,id")
+    @Select("SELECT * FROM app_user WHERE role IN ('ENGINEER','ADMIN') AND status='ACTIVE' ORDER BY name,id")
     List<UserEntity> activeEngineers();
 
     default Page<UserEntity> findPage(int page, String q, String role, String status) {

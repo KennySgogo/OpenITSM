@@ -120,7 +120,7 @@ public class UserServiceImpl implements UserService {
                     String newRole = role(patch.role());
                     if (!newRole.equals(user.role)) {
                         lastAdmin(user);
-                        if (user.role.equals("ENGINEER") && newRole.equals("EMPLOYEE")) handoff(user);
+                        if (Set.of("ENGINEER", "ADMIN").contains(user.role) && newRole.equals("EMPLOYEE")) handoff(user);
                         changes.put("role", List.of(user.role, newRole));
                         user.role = newRole; user.authVersion++; sessions.revokeAll(id);
                     }

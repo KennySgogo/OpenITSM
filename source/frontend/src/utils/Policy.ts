@@ -7,6 +7,10 @@ export function passwordIssues(password: string, confirm: string): string[] {
   return issues;
 }
 export function canAccess(role: string, path: string, view?: string): boolean {
+  if (path === '/ticket-types') return role !== 'EMPLOYEE';
+  if (path === '/knowledge/new') return role === 'ENGINEER';
+  if (path === '/knowledge' && view === 'MINE') return role === 'ENGINEER';
+  if (path === '/knowledge' && view === 'ALL') return role === 'ADMIN';
   if (['/admin/users', '/dashboard', '/settings'].includes(path)) return role === 'ADMIN';
   if (path === '/tickets' && role === 'EMPLOYEE' && view && view !== 'MINE') return false;
   return true;

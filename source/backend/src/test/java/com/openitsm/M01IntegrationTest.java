@@ -114,8 +114,9 @@ class M01IntegrationTest {
         clock.now = Instant.parse("2026-10-14T02:00:00Z");
         // Only this disposable container's test database is reset, never a configured user database.
         db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
-        db.execute("TRUNCATE ticket_attachment,ticket_reply,ticket");
+        db.execute("TRUNCATE ticket_attachment,ticket_reply,notification_task,ticket");
         admin = bootstrap.initialize("Admin", "admin@example.com", password);
+        TicketTypeTestSupport.type(db, "Test");
     }
 
     Browser anonymous() throws Exception {
@@ -181,7 +182,7 @@ class M01IntegrationTest {
 
     @Test void databaseAndMigrationAreRealPostgres17() {
         assertThat(db.queryForObject("SHOW server_version", String.class)).startsWith("17.");
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(6);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(14);
         assertThat(db.queryForObject("SELECT count(*) FROM account_bootstrap", Integer.class)).isEqualTo(1);
         assertThatThrownBy(() -> bootstrap.initialize("Second", "second@example.com", password)).isInstanceOf(BusinessException.class).hasMessage("初始化入口已关闭");
     }
@@ -248,7 +249,7 @@ class M01IntegrationTest {
         }).content("{}")).andReturn(), 403);
         active("employee@example.com", "EMPLOYEE"); Browser employee = signed("employee@example.com");
         assertStatus(http.perform(get("/api/v1/users").cookie(employee.cookie())).andReturn(), 403);
-        assertStatus(http.perform(get("/api/v1/users/assignees").cookie(employee.cookie())).andReturn(), 403);
+        assertStatus(http.perform(get("/api/v1/users/assignees").cookie(employee.cookie())).andReturn(), 200);
         clock.advance(7199);
         assertStatus(http.perform(get("/api/v1/auth/me").cookie(employee.cookie())).andReturn(), 200);
         clock.advance(1);
@@ -406,7 +407,7 @@ class M01IntegrationTest {
         Browser browser = signed("admin@example.com");
         assertStatus(memberAction(browser, admin, "disable", 0, "{\"reason\":\"Leaving company\"}"), 409);
         UUID engineer = active("engineer@example.com", "ENGINEER"); Browser engineerBrowser = signed("engineer@example.com");
-        db.update("INSERT INTO ticket (id,requester_id,assignee_id,status,title,description,business_type,impact_scope) VALUES (?,?,?,'RESOLVED','Test','Test','Test','Test')", UUID.randomUUID(), admin, engineer);
+        db.update("INSERT INTO ticket (id,requester_id,assignee_id,status,title,description,business_type,impact_scope,business_type_id) VALUES (?,?,?,'RESOLVED','Test','Test','Test','Test','5716d812-6943-3c2f-9c7f-96424a156bbf')", UUID.randomUUID(), admin, engineer);
         var blocked = memberAction(browser, engineer, "disable", 0, "{\"reason\":\"Leaving company\"}");
         assertStatus(blocked, 409); assertThat(code(blocked)).isEqualTo("MEMBER_HAS_OPEN_TICKETS");
         assertThat(blocked.getResponse().getContentAsString()).contains("1");
@@ -474,8 +475,8 @@ class M01IntegrationTest {
     @Test void legitimateOriginalTicketPageIsCheckedAgainstCurrentVisibility() throws Exception {
         UUID employee = active("employee@example.com", "EMPLOYEE");
         UUID ownTicket = UUID.randomUUID(); UUID otherTicket = UUID.randomUUID();
-        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope) VALUES (?,?,'Test','Test','Test','Test')", ownTicket, employee);
-        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope) VALUES (?,?,'Test','Test','Test','Test')", otherTicket, admin);
+        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope,business_type_id) VALUES (?,?,'Test','Test','Test','Test','5716d812-6943-3c2f-9c7f-96424a156bbf')", ownTicket, employee);
+        db.update("INSERT INTO ticket (id,requester_id,title,description,business_type,impact_scope,business_type_id) VALUES (?,?,'Test','Test','Test','Test','5716d812-6943-3c2f-9c7f-96424a156bbf')", otherTicket, admin);
         var own = login(anonymous(), "employee@example.com", password, "/tickets/" + ownTicket);
         assertStatus(own, 200); assertThat(data(own).get("redirectPath").asText()).isEqualTo("/tickets/" + ownTicket);
         var other = login(anonymous(), "employee@example.com", password, "/tickets/" + otherTicket);
@@ -534,7 +535,7 @@ class M01IntegrationTest {
             try (var lock = connection.prepareStatement("SELECT id FROM app_user WHERE id=? FOR UPDATE")) {
                 lock.setObject(1, engineer); lock.execute();
             }
-            try (var insert = connection.prepareStatement("INSERT INTO ticket (id,requester_id,assignee_id,title,description,business_type,impact_scope) VALUES (?,?,?,'Test','Test','Test','Test')")) {
+            try (var insert = connection.prepareStatement("INSERT INTO ticket (id,requester_id,assignee_id,title,description,business_type,impact_scope,business_type_id) VALUES (?,?,?,'Test','Test','Test','Test','5716d812-6943-3c2f-9c7f-96424a156bbf')")) {
                 insert.setObject(1, UUID.randomUUID()); insert.setObject(2, admin); insert.setObject(3, engineer); insert.execute();
             }
             var pending = pool.submit(() -> memberAction(browser, engineer, "disable", 0, "{\"reason\":\"Leaving company\"}"));
@@ -558,7 +559,7 @@ class M01IntegrationTest {
         var flyway = org.flywaydb.core.Flyway.configure().dataSource(db.getDataSource()).load();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(6);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(14);
     }
 
     @Test void protocolErrorsAreClientErrorsAndIdempotencyCoversOriginalValues() throws Exception {

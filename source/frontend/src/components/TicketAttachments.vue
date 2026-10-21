@@ -118,7 +118,7 @@ function sizeLabel(size: number) { return size < 1024 ? `${size} B` : size < 102
     <div class="upload-area">
       <ErrorNotice :error="error" />
       <ElAlert v-if="pending && error" title="上传结果尚未确认，请重试原请求；文件、可见性和版本已保留，避免重复上传。" type="info" :closable="false" />
-      <template v-if="ticket.status !== 'CLOSED' || pending">
+      <template v-if="!['CLOSED', 'REJECTED'].includes(ticket.status) || pending">
         <fieldset :disabled="busy || !!pending || refreshing || externalBlocked">
           <legend>上传附件</legend>
           <p class="hint">一次一个文件，最大 10 MiB。附件仅供下载，不提供在线预览。</p>
@@ -128,7 +128,7 @@ function sizeLabel(size: number) { return size < 1024 ? `${size} B` : size < 102
         </fieldset>
         <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (!pending && !permitted)" @click="upload">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原上传' : '上传附件' }}</ElButton></div>
       </template>
-      <p v-else class="hint">工单已关闭，不能上传附件，已有附件仍可下载。<RouterLink to="/tickets/new">新建工单</RouterLink></p>
+      <p v-else class="hint">工单已结束，不能上传附件，已有附件仍可下载。<RouterLink to="/tickets/new">新建工单</RouterLink></p>
     </div>
   </section>
 </template>

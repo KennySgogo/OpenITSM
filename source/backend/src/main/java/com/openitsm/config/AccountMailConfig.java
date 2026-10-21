@@ -21,6 +21,8 @@ public class AccountMailConfig {
     private final String publicBaseUrl;
     private final MailProperties properties;
     private final Environment environment;
+    @Value("${openitsm.ticket-mail.enabled:false}")
+    private boolean ticketMailEnabled;
 
     public AccountMailConfig(@Value("${openitsm.account-mail.enabled:false}") boolean enabled,
                              @Value("${openitsm.account-mail.from:}") String from,
@@ -82,7 +84,23 @@ public class AccountMailConfig {
     }
 
     public String from() { return from; }
+    public boolean localProfile() { return environment.matchesProfiles("local", "test"); }
+
+    /** Validate a per-delivery snapshot without changing deployment switches or the shared sender. */
+    public JavaMailSenderImpl runtimeSender(com.openitsm.service.SettingsSnapshot.Smtp value) {
+        var mail = new MailProperties();
+        mail.setHost(value.host()); mail.setPort(value.port()); mail.setUsername(value.username()); mail.setPassword(value.password());
+        mail.getProperties().put("mail.smtp.ssl.enable", Boolean.toString("SSL".equals(value.security())));
+        mail.getProperties().put("mail.smtp.starttls.enable", Boolean.toString("STARTTLS".equals(value.security())));
+        mail.getProperties().put("mail.smtp.starttls.required", Boolean.toString("STARTTLS".equals(value.security())));
+        boolean localPeer = localProfile() && loopback(value.host());
+        mail.getProperties().put("mail.smtp.auth", Boolean.toString(!localPeer || !blank(value.username())));
+        var effective = new AccountMailConfig(enabled, value.from(), publicBaseUrl, mail, environment);
+        effective.requireReady();
+        return effective.javaMailSender();
+    }
     public boolean enabled() { return enabled; }
+    public boolean ticketMailEnabled() { return ticketMailEnabled; }
     public String publicBaseUrl() { return publicBaseUrl.replaceAll("/+$", ""); }
     private static boolean blank(String value) { return value == null || value.isBlank(); }
     private static boolean loopback(String host) { return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host) || "::1".equals(host); }

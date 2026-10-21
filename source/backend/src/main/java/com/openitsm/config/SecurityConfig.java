@@ -33,7 +33,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> {
                 auth.requestMatchers("/health/**", "/api/v1/auth/**").permitAll();
                 if (env.matchesProfiles("local")) auth.requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll();
-                auth.requestMatchers("/api/v1/users/assignees").hasAnyRole("ENGINEER", "ADMIN")
+                auth.requestMatchers("/api/v1/users/assignees").authenticated()
                     .requestMatchers("/api/v1/users/**").hasRole("ADMIN")
                     .requestMatchers("/api/**").authenticated().anyRequest().permitAll();
             })

@@ -47,6 +47,15 @@ test('bodyless actions keep no body and rate limiting uses Retry-After', async (
   await assert.rejects(request('/users/member/unlock', { method: 'POST', key: 'key', version: 1 }), (error: ApiError) => error.retryAfter === 120);
   assert.ok(getCooldownUntil() > Date.now() + 119000);
 });
+
+test('model test rate limiting does not extend the cooldown for manual operations or retry the model', async () => {
+  const previous = getCooldownUntil();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return fail(429, 'RATE_LIMITED', { 'Retry-After': '3600' }); };
+  await assert.rejects(request('/settings/model-connection-tests', { method: 'POST' }), (error: ApiError) => error.retryAfter === 3600);
+  assert.equal(calls, 1);
+  assert.equal(getCooldownUntil(), previous);
+});
 test('refresh after memory loss obtains CSRF before writing', async () => {
   clearHttpSession();
   const paths: string[] = [];

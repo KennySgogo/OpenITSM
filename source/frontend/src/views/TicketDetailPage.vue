@@ -32,7 +32,7 @@ watch(() => route.params.id, () => load(), { immediate: true });
 </script>
 
 <template>
-  <div class="page-heading"><div><span class="eyebrow">服务工单</span><h1>{{ ticket?.number ?? '工单详情' }}</h1></div><RouterLink to="/tickets?view=MINE"><ElButton>返回我的工单</ElButton></RouterLink></div>
+  <div class="page-heading"><div><span class="eyebrow">服务工单</span><h1>{{ ticket?.number ?? '工单详情' }}</h1></div><ElButton :disabled="blocked || actionLocked || communicationLocked || attachmentLocked" @click="load(true)">刷新详情与时限</ElButton><RouterLink to="/tickets?view=MINE"><ElButton>返回我的工单</ElButton></RouterLink></div>
   <ErrorNotice :error="error" />
   <div v-if="error" class="detail-retry"><ElButton :disabled="blocked" @click="load()">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '重新加载' }}</ElButton></div>
   <section v-loading="busy" class="ticket-detail">
@@ -44,12 +44,13 @@ watch(() => route.params.id, () => load(), { immediate: true });
         <ElDescriptionsItem label="创建时间">{{ new Date(ticket.createdAt).toLocaleString('zh-CN') }}</ElDescriptionsItem><ElDescriptionsItem v-if="ticket.closedAt" label="关闭时间">{{ new Date(ticket.closedAt).toLocaleString('zh-CN') }}</ElDescriptionsItem>
       </ElDescriptions>
       <h3>问题描述</h3><p class="ticket-text">{{ ticket.description }}</p>
+      <template v-if="ticket.rejectionReason"><h3>拒绝原因</h3><p class="ticket-text">{{ ticket.rejectionReason }}</p><p>{{ ticket.rejectedAt ? new Date(ticket.rejectedAt).toLocaleString('zh-CN') : '' }}</p></template>
       <template v-if="ticket.resolutionSummary"><h3>解决摘要</h3><p class="ticket-text">{{ ticket.resolutionSummary }}</p></template>
     </template>
   </section>
+  <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
   <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="communicationLocked || attachmentLocked" @lock="actionLocked = $event" @refresh="load(true)" />
   <TicketCommunication v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || attachmentLocked" @lock="communicationLocked = $event" @refresh="load(true)" />
-  <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
 </template>
 
 <style scoped>

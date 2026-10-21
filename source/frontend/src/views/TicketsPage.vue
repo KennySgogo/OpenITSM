@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import ErrorNotice from '../components/ErrorNotice.vue';
+import { sessionState } from '../stores/SessionStore';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels, ticketViewLabels } from '../types/ApiTypes';
@@ -10,7 +11,12 @@ import type { TicketPage, TicketView } from '../types/ApiTypes';
 const route = useRoute();
 const router = useRouter();
 const { error, busy, blocked, waitSeconds, showError } = useFeedback();
-const filters = reactive({ q: '', status: '', businessType: '' });
+const emptyFilters = { q: '', status: '', businessTypeId: '', lifecycle: '', createdFrom: '', createdTo: '', priority: '', requesterId: '', assigneeId: '' };
+const filters = reactive({ ...emptyFilters });
+const staff = computed(() => sessionState.session?.user.role !== 'EMPLOYEE');
+const options = ref<{ businessTypes: { id: string; name: string; active: boolean }[]; requesters?: { id: string; name: string }[]; assignees?: { id: string; name: string }[] }>({ businessTypes: [] });
+const states = computed(() => Object.entries(ticketStatusLabels).filter(([status]) => !filters.lifecycle || filters.lifecycle === 'ALL' || (filters.lifecycle === 'ENDED' ? ['CLOSED', 'REJECTED'].includes(status) : !['CLOSED', 'REJECTED'].includes(status))));
+onMounted(async () => { try { options.value = await request('/tickets/filter-options'); } catch (value) { showError(value); } });
 const result = ref<TicketPage>({ items: [], page: 1, pageSize: 20, total: 0 });
 const view = computed(() => String(route.query.view ?? 'MINE'));
 const title = computed(() => ticketViewLabels[view.value as TicketView] || '工单');
@@ -23,7 +29,7 @@ async function load() {
   error.value = undefined;
   result.value = { items: [], page: 1, pageSize: 20, total: 0 };
   const params = new URLSearchParams({ view: view.value });
-  for (const key of ['page', 'q', 'status', 'businessType']) {
+  for (const key of ['page', ...Object.keys(emptyFilters)]) {
     const value = route.query[key];
     if (value !== undefined) params.set(key, String(value ?? ''));
   }
@@ -35,21 +41,17 @@ async function load() {
 }
 
 watch(() => route.fullPath, () => {
-  filters.q = String(route.query.q ?? '');
-  filters.status = String(route.query.status ?? '');
-  filters.businessType = String(route.query.businessType ?? '');
+  for (const key of Object.keys(emptyFilters) as (keyof typeof emptyFilters)[]) filters[key] = String(route.query[key] ?? (key === 'lifecycle' ? (view.value === 'ASSIGNED' ? 'OPEN' : 'ALL') : ''));
   void load();
 }, { immediate: true });
 
 function search() {
   const query: Record<string, string> = { view: view.value };
-  if (filters.q.trim()) query.q = filters.q.trim();
-  if (filters.status) query.status = filters.status;
-  if (filters.businessType.trim()) query.businessType = filters.businessType.trim();
+  for (const key of Object.keys(emptyFilters) as (keyof typeof emptyFilters)[]) if (filters[key]) query[key] = filters[key];
   if (router.resolve({ path: '/tickets', query }).fullPath === route.fullPath) void load();
   else void router.push({ path: '/tickets', query });
 }
-function reset() { Object.assign(filters, { q: '', status: '', businessType: '' }); search(); }
+function reset() { Object.assign(filters, { ...emptyFilters }); search(); }
 function changePage(page: number) { void router.push({ path: '/tickets', query: { ...route.query, page: String(page) } }); }
 </script>
 
@@ -58,8 +60,13 @@ function changePage(page: number) { void router.push({ path: '/tickets', query: 
   <section class="tickets-card">
     <form class="ticket-filters" @submit.prevent="search">
       <ElInput v-model="filters.q" placeholder="搜索编号、标题或描述" aria-label="关键词" clearable />
-      <ElSelect v-model="filters.status" placeholder="全部状态" aria-label="工单状态" clearable><ElOption v-for="(label, status) in ticketStatusLabels" :key="status" :label="label" :value="status" /></ElSelect>
-      <ElInput v-model="filters.businessType" placeholder="业务类型（精确匹配）" aria-label="业务类型" clearable />
+      <ElSelect v-model="filters.status" placeholder="全部状态" aria-label="工单状态" clearable><ElOption v-for="[status, label] in states" :key="status" :label="label" :value="status" /></ElSelect>
+      <ElSelect v-model="filters.businessTypeId" placeholder="全部业务类型" clearable><ElOption v-for="type in options.businessTypes" :key="type.id" :value="type.id" :label="type.name + (type.active ? '' : '（已移除）')" /></ElSelect>
+      <ElSelect v-model="filters.lifecycle" placeholder="结束范围" @change="filters.status = ''"><ElOption label="未结束" value="OPEN" /><ElOption label="已结束" value="ENDED" /><ElOption label="全部" value="ALL" /></ElSelect>
+      <ElDatePicker v-model="filters.createdFrom" type="date" value-format="YYYY-MM-DD" placeholder="创建起日" /><ElDatePicker v-model="filters.createdTo" type="date" value-format="YYYY-MM-DD" placeholder="创建止日" />
+      <ElSelect v-model="filters.priority" clearable placeholder="全部优先级"><ElOption v-for="value in ['P1','P2','P3','P4']" :key="value" :label="value" :value="value" /></ElSelect>
+      <ElSelect v-if="staff" v-model="filters.requesterId" clearable filterable placeholder="全部提单人"><ElOption v-for="person in options.requesters" :key="person.id" :value="person.id" :label="person.name" /></ElSelect>
+      <ElSelect v-if="staff" v-model="filters.assigneeId" clearable filterable placeholder="全部负责人"><ElOption v-for="person in options.assignees" :key="person.id" :value="person.id" :label="person.name" /></ElSelect>
       <ElButton type="primary" native-type="submit" :disabled="blocked">搜索</ElButton><ElButton :disabled="blocked" @click="reset">重置</ElButton>
     </form>
     <ErrorNotice :error="error" />
@@ -80,7 +87,7 @@ function changePage(page: number) { void router.push({ path: '/tickets', query: 
 
 <style scoped>
 .tickets-card { background: #fff; border: 1px solid #e3e9f2; border-radius: 9px; padding: 0 22px; }
-.ticket-filters { display: flex; gap: 10px; padding: 22px 0; }
+.ticket-filters { display: flex; flex-wrap: wrap; gap: 10px; padding: 22px 0; }
 .ticket-filters > .el-input { max-width: 260px; }
 .ticket-filters > .el-select { width: 155px; }
 .ticket-filters .el-button + .el-button { margin-left: 0; }

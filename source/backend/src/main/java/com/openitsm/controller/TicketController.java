@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import java.util.Map;
 import java.util.UUID;
 
@@ -31,8 +32,13 @@ public class TicketController {
     @GetMapping
     public ApiResponse<?> list(@RequestParam(required = false) String view, @RequestParam(required = false) String page,
         @RequestParam(required = false) String status, @RequestParam(required = false) String businessType,
-        @RequestParam(required = false) String q, HttpServletRequest request) {
-        return ApiResponse.of(request, service.list(RequestAuthentication.from(request), view, page, status, businessType, q));
+        @RequestParam(required = false) String q, @ModelAttribute com.openitsm.dto.TicketQueryRequest filters, HttpServletRequest request) {
+        return ApiResponse.of(request, service.list(RequestAuthentication.from(request), view, page, status, businessType, q, filters));
+    }
+
+    @GetMapping("/filter-options")
+    public ApiResponse<?> options(HttpServletRequest request) {
+        return ApiResponse.of(request, service.filterOptions(RequestAuthentication.from(request)));
     }
 
     @GetMapping("/{id}")
@@ -55,7 +61,7 @@ public class TicketController {
         return change(id, body, version, key, request);
     }
 
-    @PostMapping({"/{id}/suspensions", "/{id}/reopen"})
+    @PostMapping({"/{id}/suspensions", "/{id}/reopen", "/{id}/rejections"})
     public ResponseEntity<?> reasonAction(@PathVariable UUID id, @RequestBody TicketReasonRequest body,
         @RequestHeader(value = "If-Match", required = false) String version,
         @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
@@ -95,7 +101,7 @@ public class TicketController {
     @PostMapping
     public ResponseEntity<?> create(@RequestBody CreateTicketRequest body,
         @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        var ticket = service.create(RequestAuthentication.from(request), body, key);
+        var ticket = service.create(RequestAuthentication.from(request), body, key, UUID.fromString((String) request.getAttribute("requestId")));
         var response = ResponseEntity.status(201);
         if (ticket.replayed()) response.header("Idempotent-Replayed", "true");
         return response.body(ApiResponse.of(request, ticket));

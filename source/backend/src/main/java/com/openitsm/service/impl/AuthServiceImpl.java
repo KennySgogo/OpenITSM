@@ -13,6 +13,7 @@ import com.openitsm.service.SessionService;
 import com.openitsm.common.exception.BusinessException;
 import com.openitsm.common.utils.TokenCodec;
 import com.openitsm.mapper.TicketMapper;
+import com.openitsm.mapper.KnowledgeArticleMapper;
 import com.openitsm.entity.UserEntity;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.vo.UserVO;
@@ -38,11 +39,13 @@ public class AuthServiceImpl implements AuthService {
     private final Clock clock;
     private final String dummyHash;
     private final TicketMapper tickets;
+    private final KnowledgeArticleMapper knowledge;
 
-    public AuthServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, org.springframework.transaction.PlatformTransactionManager transactionManager, AccountMailService mail, AuditService audit, PasswordEncoder encoder, Clock clock, TicketMapper tickets) {
+    public AuthServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, org.springframework.transaction.PlatformTransactionManager transactionManager, AccountMailService mail, AuditService audit, PasswordEncoder encoder, Clock clock, TicketMapper tickets, KnowledgeArticleMapper knowledge) {
         this.users = users; this.sessions = sessions; this.tokens = tokens; this.rates = rates;
         this.transactions = new org.springframework.transaction.support.TransactionTemplate(transactionManager); this.mail = mail; this.audit = audit; this.encoder = encoder; this.clock = clock;
         this.tickets = tickets;
+        this.knowledge = knowledge;
         this.dummyHash = encoder.encode(TokenCodec.token());
     }
 
@@ -68,6 +71,27 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private BusinessException invalidLogin() { return new BusinessException(401, "AUTH_INVALID", "邮箱或密码错误，或账号暂不可用"); }
+
+    public void changePassword(com.openitsm.service.AuthContext context, com.openitsm.dto.ChangePasswordRequest body, UUID requestId, String source) {
+        rates.check("PASSWORD_CHANGE_SOURCE", source, 60, Duration.ofMinutes(1), 0);
+        rates.check("PASSWORD_CHANGE_MEMBER", context.user().id.toString(), 5, Duration.ofMinutes(15), 0);
+        com.openitsm.common.utils.Values.password(body.password(), body.confirmPassword());
+        if (body.oldPassword() == null || body.oldPassword().isEmpty() || body.oldPassword().codePointCount(0, body.oldPassword().length()) > 64)
+            throw BusinessException.field("oldPassword", "请输入有效的旧密码");
+        transactions.executeWithoutResult(status -> {
+            var user = users.lock(context.user().id);
+            if (user == null || !"ACTIVE".equals(user.status) || user.authVersion != context.session().authVersion())
+                throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
+            if (!encoder.matches(body.oldPassword(), user.passwordHash)) throw BusinessException.field("oldPassword", "旧密码不正确");
+            user.passwordHash = encoder.encode(body.password());
+            user.authVersion++; user.version++; user.updatedAt = clock.instant();
+            user.failedCount = 0; user.lockedUntil = null;
+            users.updateById(user);
+            tokens.invalidate(user.id, "RESET"); tokens.invalidate(user.id, "INVITE");
+            sessions.revokeAll(user.id);
+            audit.append(user.id, "PASSWORD_CHANGED", user.id, Map.of("password", "已更新"), null, requestId);
+        });
+    }
 
     @Transactional
     public LoginSession login(String email, String password, String oldHash) {
@@ -113,6 +137,23 @@ public class AuthServiceImpl implements AuthService {
 
     private boolean allowedPath(UserEntity user, String value) {
         if (value == null || value.length() > 2048) return false;
+        if (value.equals("/profile")) return true;
+        if (value.equals("/ticket-types")) return !"EMPLOYEE".equals(user.role);
+        if (value.equals("/knowledge/new")) return user.role.equals("ENGINEER");
+        if (value.startsWith("/knowledge?")) {
+            try {
+                String view = "PUBLISHED";
+                for (String item : java.net.URI.create(value).getRawQuery().split("&")) {
+                    if (item.startsWith("view=")) view = java.net.URLDecoder.decode(item.substring(5), java.nio.charset.StandardCharsets.UTF_8);
+                }
+                return view.equals("PUBLISHED") || (view.equals("MINE") && user.role.equals("ENGINEER"))
+                    || (view.equals("ALL") && user.role.equals("ADMIN"));
+            } catch (IllegalArgumentException ex) { return false; }
+        }
+        if (value.matches("/knowledge/[0-9a-fA-F-]{36}")) {
+            try { return knowledge.visible(UUID.fromString(value.substring("/knowledge/".length())), user.id, user.role); }
+            catch (IllegalArgumentException ex) { return false; }
+        }
         if (value.equals("/knowledge") || value.equals("/tickets") || value.equals("/tickets/new") || value.equals("/tickets?view=MINE")) return true;
         if (value.matches("/tickets/[0-9a-fA-F-]{36}")) {
             try { return user.role.equals("EMPLOYEE")

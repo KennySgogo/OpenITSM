@@ -19,6 +19,7 @@ import com.openitsm.service.AuthContext;
 import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketCommunicationService;
+import com.openitsm.service.TicketNotificationService;
 import com.openitsm.vo.ActionVO;
 import com.openitsm.vo.TicketOperationPageVO;
 import com.openitsm.vo.TicketOperationVO;
@@ -46,11 +47,14 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
     private final SessionService sessions;
     private final Clock clock;
     private final ObjectMapper json;
+    private final TicketNotificationService notifications;
 
     public TicketCommunicationServiceImpl(TicketMapper tickets, TicketReplyMapper replies, TicketOperationMapper operations,
-        UserMapper users, IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json) {
+        UserMapper users, IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json,
+        TicketNotificationService notifications) {
         this.tickets = tickets; this.replies = replies; this.operations = operations; this.users = users;
         this.idem = idem; this.audit = audit; this.sessions = sessions; this.clock = clock; this.json = json;
+        this.notifications = notifications;
     }
 
     @Override
@@ -77,17 +81,22 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
         if (previous != null) return previous;
         if (ticket.version != expectedVersion)
             throw new BusinessException(409, "VERSION_CONFLICT", "工单已更新，请刷新后重试");
-        if ("CLOSED".equals(ticket.status))
+        if (Set.of("CLOSED", "REJECTED").contains(ticket.status))
             throw new BusinessException(409, "INVALID_STATE", "工单已关闭，不能追加回复，请新建工单");
         var reply = new TicketReplyEntity();
         reply.id = UUID.randomUUID(); reply.ticketId = id; reply.authorId = actorId;
         reply.content = body.content().strip(); reply.visibility = internal ? "INTERNAL" : "PUBLIC";
         reply.createdAt = clock.instant();
         replies.insert(reply);
+        if (!internal && ticket.firstRespondedAt == null
+            && Set.of("ENGINEER", "ADMIN").contains(actor.role)) {
+            ticket.firstRespondedAt = reply.createdAt;
+        }
         ticket.version++;
         tickets.updateById(ticket);
         audit.appendTicket(actorId, internal ? "TICKET_INTERNAL_NOTE" : "TICKET_REPLY", id,
             Map.of("replyId", reply.id), null, requestId);
+        if (!internal) notifications.enqueue(ticket, actorId, "replies");
         sessions.touch(context.session().hash());
         return idem.save(actorId, operation, requestKey, hash, id, ticket.version, 200);
     }
@@ -138,7 +147,7 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
                     }
                     result.put(side, snapshot);
                 }
-                if (!employee && event.reason != null) result.put("reason", event.reason);
+                if ((!employee || "TICKET_REJECTIONS".equals(event.action)) && event.reason != null) result.put("reason", event.reason);
             }
             return result;
         } catch (JsonProcessingException ex) { throw new IllegalStateException("Invalid ticket audit payload", ex); }

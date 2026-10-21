@@ -13,7 +13,7 @@ public interface TicketOperationMapper extends BaseMapper<TicketOperationEntity>
         var query = new QueryWrapper<TicketOperationEntity>().eq("object_type", "TICKET").eq("object_id", ticketId)
             .eq("outcome", "SUCCESS").in("action", "TICKET_CLAIM", "TICKET_ASSIGNMENTS", "TICKET_TRANSFERS",
                 "TICKET_SUSPENSIONS", "TICKET_RESUME", "TICKET_RESOLUTIONS", "TICKET_CLOSE", "TICKET_REOPEN",
-                "TICKET_PRIORITY_CHANGES", "TICKET_REPLY", "TICKET_INTERNAL_NOTE", "TICKET_ATTACHMENT", "TICKET_INTERNAL_ATTACHMENT");
+                "TICKET_REJECTIONS", "TICKET_PRIORITY_CHANGES", "TICKET_REPLY", "TICKET_INTERNAL_NOTE", "TICKET_ATTACHMENT", "TICKET_INTERNAL_ATTACHMENT");
         if (employee) query.notIn("action", "TICKET_INTERNAL_NOTE", "TICKET_INTERNAL_ATTACHMENT");
         query.orderByAsc("created_at", "id");
         return selectPage(new Page<>(page, 20), query);

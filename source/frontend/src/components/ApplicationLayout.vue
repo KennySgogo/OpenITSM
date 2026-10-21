@@ -15,12 +15,15 @@ const user = computed(() => sessionState.session?.user);
 const allowed = computed(() => !!user.value && canAccess(user.value.role, route.path, String(route.query.view || '')));
 const navigation = computed(() => [
   { to: '/tickets/new', label: '提交工单', symbol: '＋', implemented: true },
-  ...(user.value?.role === 'ADMIN' ? [{ to: '/dashboard', label: '服务看板', symbol: '▦' }] : []),
+  ...(user.value?.role === 'ADMIN' ? [{ to: '/dashboard', label: '服务看板', symbol: '▦', implemented: true }] : []),
   { to: '/tickets?view=MINE', label: '我的工单', symbol: '▤', implemented: true },
   ...(user.value?.role !== 'EMPLOYEE' ? [{ to: '/tickets?view=ASSIGNED', label: '我的待办', symbol: '☑', implemented: true }, { to: '/tickets?view=UNASSIGNED', label: '未分派队列', symbol: '▥', implemented: true }, { to: '/tickets?view=ALL', label: '全部工单', symbol: '▤', implemented: true }] : []),
-  { to: '/knowledge', label: '知识库', symbol: '▧' }
+  { to: '/knowledge', label: '知识库', symbol: '▧', implemented: true },
+  ...(user.value?.role !== 'EMPLOYEE' ? [{ to: '/ticket-types', label: '业务类型', symbol: '◇', implemented: true }] : []),
+  { to: '/profile', label: '个人资料', symbol: '○', implemented: true }
 ]);
 function active(to: string) {
+  if (to === '/knowledge') return route.path === '/knowledge' || route.path.startsWith('/knowledge/');
   if (to.startsWith('/tickets?view=')) return route.path === '/tickets' && (route.query.view ?? 'MINE') === to.slice('/tickets?view='.length);
   return route.fullPath === to || (!to.includes('?') && route.path === to);
 }
@@ -48,7 +51,7 @@ onUnmounted(() => window.removeEventListener('session-error', activityError));
     <aside class="sidebar">
       <BrandMark /><div class="workspace-label">团队工作空间</div>
       <nav class="side-nav"><RouterLink v-for="item in navigation" :key="item.to" :to="item.to" :class="{ active: active(item.to) }"><span class="nav-symbol">{{ item.symbol }}</span>{{ item.label }}<span v-if="!('implemented' in item && item.implemented)" class="nav-planned">待建设</span></RouterLink></nav>
-      <template v-if="user.role === 'ADMIN'"><div class="workspace-label admin-label">管理</div><nav class="side-nav"><RouterLink to="/admin/users" :class="{ active: route.path === '/admin/users' }"><span class="nav-symbol">♧</span>成员管理</RouterLink><RouterLink to="/settings" :class="{ active: route.path === '/settings' }"><span class="nav-symbol">⚙</span>团队配置<span class="nav-planned">待建设</span></RouterLink></nav></template>
+      <template v-if="user.role === 'ADMIN'"><div class="workspace-label admin-label">管理</div><nav class="side-nav"><RouterLink to="/admin/users" :class="{ active: route.path === '/admin/users' }"><span class="nav-symbol">♧</span>成员管理</RouterLink><RouterLink to="/settings" :class="{ active: route.path === '/settings' }"><span class="nav-symbol">⚙</span>团队配置</RouterLink></nav></template>
       <div class="sidebar-bottom"><div class="profile"><ElAvatar :size="36">{{ user.name.slice(0, 1) }}</ElAvatar><div><strong>{{ user.name }}</strong><span>{{ roleLabels[user.role] }}</span></div></div></div>
     </aside>
     <div class="app-main"><header class="topbar"><span class="breadcrumb">工作空间 <span>/</span> <strong>{{ route.meta.title }}</strong></span><div class="topbar-right"><span>{{ user.email }}</span><ElButton text :loading="busy" :disabled="blocked" @click="logout">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '退出登录' }}</ElButton></div></header>

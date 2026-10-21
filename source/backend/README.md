@@ -38,7 +38,7 @@ M01 原子写入加密 notification_task，状态为 PENDING；重发/消费/停
 
 | 环境变量 | 用途与示例 |
 | --- | --- |
-| OPENITSM_ACCOUNT_MAIL_ENABLED | 默认 false；第三阶段确认配置和历史待发送收件人后再启用。开启后会自动处理现有 PENDING 和租约过期 RUNNING 任务 |
+| OPENITSM_ACCOUNT_MAIL_ENABLED | 默认 false；邮件投递总开关，启用前核对配置和积压收件人。账号任务开启后自动处理；工单任务另需开启 OPENITSM_TICKET_MAIL_ENABLED |
 | OPENITSM_SMTP_HOST | SMTP 主机，例如 smtp.163.com |
 | OPENITSM_SMTP_PORT | SMTP 端口，默认 465 |
 | OPENITSM_SMTP_USERNAME | 完整发件邮箱，由部署者本地填写 |
@@ -78,15 +78,15 @@ AccountMailDispatchTest 使用独立 PostgreSQL 测试库、本地 SMTP 和可�
 
 M02 已通过 V3 建立 ticket 表及编号序列。`POST /api/v1/tickets` 使用现有登录 Cookie、Origin、CSRF 和 Idempotency-Key，创建不需 If-Match；请求/响应见根目录 API.md。M02HttpTest 通过真实 HTTP 和隔离 PostgreSQL 验证提单、校验、幂等、并发及健康状态，前端已接入提单页面。
 
-M03 后端提供认领/受理、分派、转派、挂起、恢复、解决、关闭、重开和调整优先级，均需当前工单 If-Match 与 Idempotency-Key。V4 增加优先级（新旧工单默认 P3）、解决摘要、关闭时间及轮次起点，未修改 V1～V3。重开清空关闭时间并重置轮次起点，保留有效负责人，原负责人已停用或降级时清空，由管理员后续分派；尚不计算 M07 SLA。
+M03 后端提供认领/受理、分派、转派、挂起、恢复、解决、关闭、重开和调整优先级，均需当前工单 If-Match 与 Idempotency-Key。V4 增加优先级（新旧工单默认 P3）、解决摘要、关闭时间及轮次起点，未修改 V1～V3。重开清空关闭时间并重置轮次起点，保留有效负责人，原负责人已停用或降级时清空，由管理员后续分派；M07 现已接入本轮首次响应与解决时间，规则见 API.md。
 
 `TicketMapper` 检查 status != CLOSED 的全部名下工单，包括 RESOLVED；M03 沿用 M01 的成员控制锁，再锁成员行与工单行，分派前核对 ACTIVE ENGINEER，避免与停用/降级竞争产生无效负责人。工单变更、原因审计和成功幂等记录使用同一事务。M03HttpTest 使用真实 HTTP、隔离 PostgreSQL 和可控时钟覆盖九个动作、权限、幂等、并发、七天边界、回滚与 V3 升级；不发真实邮件。
 
 M03 前端已通过 M05 详情接入九个流转动作，未扩展 M04。测试可显式设置 `OPENITSM_M03_HOLD_SECONDS`（最多 600 秒），在 M03HttpTest 结束后短暂保留隔离数据库，供独立打包应用联调；默认不等待。
 
-M05 提供 `GET /api/v1/tickets` 与 `GET /api/v1/tickets/{id}`，复用现有工单表，无新增迁移。四个视图、固定 20 条分页、精确筛选、关键词字面子串检索及权限规则见 API.md；返回真实姓名和版本，不返回敏感账号字段或尚未实现的 SLA。M05HttpTest 通过真实 HTTP 和 PostgreSQL 验证查询、权限和无写入副作用；`OPENITSM_M05_HOLD_SECONDS` 可在测试结束后保留隔离夹具最多 300 秒供浏览器联调，默认不等待。
+M05 提供 `GET /api/v1/tickets` 与 `GET /api/v1/tickets/{id}`，复用现有工单表，无新增迁移。四个视图、固定 20 条分页、精确筛选、关键词字面子串检索及权限规则见 API.md；返回真实姓名和版本，不返回敏感账号字段；SLA 字段由 M07 补齐。M05HttpTest 通过真实 HTTP 和 PostgreSQL 验证查询、权限和无写入副作用；`OPENITSM_M05_HOLD_SECONDS` 可在测试结束后保留隔离夹具最多 300 秒供浏览器联调，默认不等待。
 
-M04 第一阶段提供公开回复、内部备注及操作记录的四个接口，规格见 API.md。V5 新增 ticket_reply 与时间线索引，复用现有工单 version、审计和幂等表；未修改旧迁移。员工的内部项在查询及分页统计前过滤，操作记录不向员工暴露内部原因或原始审计。详情页已接入，不计算首次响应或 SLA。
+M04 第一阶段提供公开回复、内部备注及操作记录的四个接口，规格见 API.md。V5 新增 ticket_reply 与时间线索引，复用现有工单 version、审计和幂等表；未修改旧迁移。员工的内部项在查询及分页统计前过滤，操作记录不向员工暴露内部原因或原始审计。详情页已接入，首次响应与 SLA 由 M07 计算。
 
 `mvn -o -B -Dtest=M04HttpTest test` 运行真实 HTTP 与隔离 PostgreSQL 验证。先 `mvn -o -B verify` 生成最新 JAR 后，可在该测试进程中设置 `OPENITSM_M04_PACKAGED_VERIFY=true`，在测试结束时额外启动独立 JAR、验证健康与四接口并自动停止；此模式要求默认 Testcontainers 数据库，不使用已有数据库选项，禁止真实邮件发送。日志为 target/m04-packaged-app.log。
 
@@ -101,3 +101,58 @@ V6 新增 ticket_attachment 元数据表，不修改 V1～V5；实际文件由 J
 `mvn -o -B -Dtest=M04AttachmentHttpTest test` 使用真实 TCP HTTP、隔离 PostgreSQL 和专用临时文件目录验证三角色、大小边界/chunked、分页、幂等/版本并发、文件回滚清理、存储故障和 V5→V6 数据保留。浏览器复用上述 M04 夹具，额外启动 JAR 时将附件根目录指向 target/ 内的验收专用目录；不使用业务附件。
 
 开发 OpenAPI 只在 local profile 开启；/health/live、/health/ready 只允许 loopback。readiness 验证数据库可查询及附件目录存在、可读写，不能保证剩余磁盘空间或检测全部文件损坏；具体文件读写失败返回 503。无 CI、容器发布或生产部署改动。
+
+## M07 处理时限
+
+V7 新增本轮首次响应、解决时间及历史数据标识，不修改旧迁移。M07 无独立接口，列表和详情返回 `sla`，复用既有权限、工单锁、版本及幂等事务。按用户确认，仅对新工单保证完整指标，旧工单为 `sla: null`；重开后开始完整记录。规则和字段见根目录 API.md。
+
+`mvn -o -B -Dtest=M07HttpTest test` 验证四档时限、精确边界、回复角色、挂起/转派/重开、优先级重算、并发/重放/回滚、读取无副作用及 V6→V7 升级。先完成 `mvn -o -B verify`，再设置进程变量 `OPENITSM_M07_PACKAGED_VERIFY=true` 运行该测试，可额外启动最新 JAR，验证健康与真实接口后自动停止。仅支持默认 Testcontainers 隔离数据库，自动关闭真实邮件，日志在 target/m07-packaged-app.log。
+
+浏览器验收可同时设置 `OPENITSM_M07_HOLD_SECONDS`（最多 1200 秒）短暂保留独立应用和隔离夹具。验收后在 `OPENITSM_M07_RELEASE_FILE` 指定的唯一 target/ 路径创建标记以提前结束；默认不等待。浏览器通过临时 Vite 对接输出的应用端口，Origin 仍为 localhost:5173。
+
+## M06 工单邮件通知
+
+仅分派/转派、公开回复、解决、关闭、重开触发通知。收件人为提单人和动作后的负责人，去重并排除操作者；发送前重新检查 ACTIVE 状态和工单可见性。邮件仅包含编号、动作和需登录的详情链接，不含标题、描述、正文、原因、内部备注或附件。不新增前端页面和发信 HTTP 接口。
+
+V8 扩展现有 notification_task；工单任务只存 ticket_id / ticket_action，不需要账号令牌加密密钥，账号 INVITE/RESET 仍使用原加密载荷。业务、通知任务、审计和幂等结果同事务提交；入队失败整体回滚。网络投递放在后台，失败沿用最多4次尝试、60/300/900秒退避和120秒租约；SMTP 接受后回写失败可能重复发信。
+
+`OPENITSM_ACCOUNT_MAIL_ENABLED` 继续作为邮件投递总开关。工单邮件另需 `OPENITSM_TICKET_MAIL_ENABLED=true`，默认 false；不修改 .env，也不因已有账号邮件开关为 true 而自动发送新通知。关闭时工单任务仍入队，但不领取、不耗费尝试。启用前先核对数据库中全部积压工单任务及收件人；显式启用后会处理既有待发送任务。SMTP、发件地址和网站地址复用前述配置，localhost 网站链接只用于本机验收。
+
+`mvn -o -B -Dtest=M06HttpTest test` 运行真实 HTTP、隔离 PostgreSQL 及本地 SMTP 验证。先完成 `mvn -o -B verify` 生成最新 JAR，再在测试进程设置 `OPENITSM_M06_PACKAGED_VERIFY=true` 运行该测试，可额外启动独立 JAR，以测试专用本机 SMTP 验证自动调度、实际 MIME 接收和幂等重放后自动停止。仅允许默认 Testcontainers 数据库，不使用已有数据库选项，不向真实收件人发送；应用日志为 target/m06-packaged-app.log。
+
+## M08 文本知识库
+
+V9 新增 knowledge_article，不修改已应用迁移；接口与角色、状态、查询及写入规则见 API.md。知识库使用现有 Service 事务、账号锁、文章锁和版本/幂等记录，不发送通知。
+
+`mvn -o -B -Dtest=M08HttpTest test` 使用真实 HTTP 和隔离 PostgreSQL 验证生命周期、角色/降级、幂等、并发/回滚、查询分页、非法参数、GET 无副作用和 V8→V9 升级。先运行 `mvn -o -B verify` 打包，再设置进程变量 `OPENITSM_M08_PACKAGED_VERIFY=true` 运行专项测试，可启动独立 JAR，验证健康和实际接口；账号及工单邮件均关闭，仅允许 Testcontainers 数据库。日志在 target/m08-packaged-app.log。
+
+浏览器验收可另设 `OPENITSM_M08_HOLD_SECONDS`（最多1200秒）和唯一的 `OPENITSM_M08_RELEASE_FILE` 标记路径；临时 Vite 使用 localhost:5179，以 OPENITSM_BACKEND_URL 指向日志输出的随机 JAR 端口。创建释放标记后自动停止应用和测试容器；默认不等待。
+
+
+## M01～M08 补齐升级（源码已接入，运行验收受阻）
+
+新增 V10～V13 分别扩展技能、拒绝、统一类型、知识附件，不改旧迁移。类型升级按旧文本精确去重，保留旧文本与历史成功建单重放；新建须提供 businessTypeId。独立类型管理、本人资料及知识附件沿用原三层。
+
+M07 已替换为 GET /api/v1/dashboard/metrics，历史 SLA 字段保留，列表/详情不再返回 sla；前文 SLA 测试说明属于旧版本。新 M07HttpTest 验证简单统计，ModuleExtensionsHttpTest 验证本轮跨模块补齐。
+
+在可用 Docker/Testcontainers 或显式隔离测试数据库环境运行 `mvn verify`；专项为 `mvn -o -B -Dtest=ModuleExtensionsHttpTest,M07HttpTest,ApplicationStartupTest verify`。本轮仅编译、非数据库检查通过，实际阻塞与日志见根 STATUS。严禁以业务库替代测试库，真实邮件与模型均未启用。
+
+知识附件位于原附件根目录的 knowledge 子目录，数据库与全部附件一起备份。Servlet 允许知识 100 MiB，工单仍经 Filter/Service 限制 10 MiB；JSON 仍 256 KiB。成功文件及逻辑移除文件不自动删除。
+
+## M14 配置与模型连接测试
+
+管理员通过 `/settings` 维护团队名、SMTP、单个模型连接及 AI 开关，接口为 GET/PATCH `/api/v1/settings` 和 POST `/api/v1/settings/model-connection-tests`，详细字段见 API.md。V14 新增单例配置及独立测试/调用状态，不改旧迁移。SMTP 投递器和领取前校验每次读取已保存配置；保留原投递开关、收件人鉴权和积压任务检查，保存不会隐式发信。
+
+凭据复用 `OPENITSM_ACCOUNT_MAIL_KEY_FILE` 指定的 AES-GCM 主密钥文件，使用独立 AAD；只写不回显，显式清除后不会回退启动凭据。已有部署主密钥可复用，不自动生成、覆盖或更改 `.env`。数据库与密钥文件需共同备份；密钥不可用时凭据操作报错，不以默认值覆盖。首次局部保存按引导配置保留省略项，保存后全部以数据库为准，后续修改环境参数不会覆盖数据库值。
+
+Python 环境与内部认证说明见 `../ai-service/README.md`。Java 使用 `OPENITSM_AI_SERVICE_URL`（默认 loopback:8001）和 `OPENITSM_AI_INTERNAL_TOKEN`，两端内部 token 必须一致且至少 32 字符；模型密钥不用于内部服务认证。测试只使用已保存连接和固定文本，AI 关闭也可测试；每位管理员每 1 秒一次，失败仍占用限频窗口。状态带 testedVersion，旧配置的成功结果不证明新配置可用。
+
+```powershell
+mvn -o -B '-Dspring.test.context.cache.maxSize=4' verify
+```
+
+全量测试限制 Spring 上下文缓存，及时关闭旧测试连接池，避免共享隔离 PostgreSQL 达到连接上限；不修改生产连接池。`M14HttpTest` 覆盖权限/CSRF、凭据/局部更新、版本/幂等/并发、动态本机 SMTP、V13→V14 升级、错误及限频、测试途中配置变化。
+
+独立 JAR 验证：先成功打包，再对测试进程设置 `OPENITSM_M14_PACKAGED_VERIFY=true` 运行 `mvn -o -B -Dtest=M14HttpTest test`；会启动最新 JAR、真实 Python 和本机模型测试接收器，验证健康、权限、固定文本及 AI 关闭下测试，最终停止临时服务。仅允许默认 Testcontainers，不使用业务库或已有数据库选项，不发送真实邮件或请求外部模型。日志为 target/m14-packaged-app.log、m14-python-app.log。
+
+浏览器可设置 `OPENITSM_M14_HOLD_SECONDS`（最多 1200）与唯一的 `OPENITSM_M14_RELEASE_FILE`，在测试后短暂保留隔离应用；端口写入 target/m14-fixture.json，临时 Vite 使用该 backendUrl。创建释放标记后停止夹具，不自动删除历史文件。

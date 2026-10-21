@@ -3,8 +3,8 @@ spring:
     name: openitsm-backend
   servlet:
     multipart:
-      max-file-size: 10485760B
-      max-request-size: 10551296B
+      max-file-size: 104857600B
+      max-request-size: 104923136B
       file-size-threshold: 0B
   datasource:
     url: ${OPENITSM_DB_URL:jdbc:postgresql://127.0.0.1:5432/openitsm}
@@ -38,6 +38,8 @@ springdoc:
   swagger-ui:
     enabled: false
 openitsm:
+  ticket-mail:
+    enabled: ${OPENITSM_TICKET_MAIL_ENABLED:false}
   attachments:
     root: ${OPENITSM_ATTACHMENT_ROOT:./.local/attachments}
   account-mail:

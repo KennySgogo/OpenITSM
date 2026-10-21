@@ -21,3 +21,12 @@ test('unlock only appears while lockedUntil is in the future', () => {
   assert.equal(isLocked('1970-01-01T00:00:02Z', 1000), true);
   assert.equal(isLocked('1970-01-01T00:00:01Z', 2000), false);
 });
+
+test('knowledge author and administration views follow current roles', () => {
+  for (const role of ['EMPLOYEE', 'ENGINEER', 'ADMIN']) {
+    assert.equal(canAccess(role, '/knowledge', 'PUBLISHED'), true);
+    assert.equal(canAccess(role, '/knowledge/new'), role === 'ENGINEER');
+    assert.equal(canAccess(role, '/knowledge', 'MINE'), role === 'ENGINEER');
+    assert.equal(canAccess(role, '/knowledge', 'ALL'), role === 'ADMIN');
+  }
+});

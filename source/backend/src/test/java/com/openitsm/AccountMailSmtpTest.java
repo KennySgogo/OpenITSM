@@ -134,6 +134,19 @@ class AccountMailSmtpTest {
         }
     }
 
+    @Test void ticketMailRejectsInvalidInputsAndDisabledTransportBeforeSending() {
+        JavaMailSender sender = mock(JavaMailSender.class);
+        var service = new SmtpMailServiceImpl(sender, config(true, "sender@example.com", "http://localhost:5173", localProperties(2525)));
+        var id = java.util.UUID.randomUUID();
+        assertThatThrownBy(() -> service.sendTicket("member@example.com\r\nBcc:other@example.com", id, "ITSM-1", "replies")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.sendTicket("member@example.com", id, "ITSM-1\r\nInjected", "replies")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.sendTicket("member@example.com", id, "ITSM-1", "internal-notes")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.sendTicket("member@example.com", null, "ITSM-1", "replies")).isInstanceOf(IllegalArgumentException.class);
+        var disabled = new SmtpMailServiceImpl(sender, config(false, "", "", localProperties(2525)));
+        assertThatThrownBy(() -> disabled.sendTicket("member@example.com", id, "ITSM-1", "replies")).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(sender);
+    }
+
     /** Minimal local test peer: accepts messages over TCP and never forwards to real recipients. */
     static final class SmtpCapture implements AutoCloseable {
         private final ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
