@@ -1,4 +1,4 @@
 package com.openitsm.vo;
 
 import java.util.UUID;
-public record ActionVO(UUID resourceId, long acceptedVersion, boolean replayed) {}
+public record ActionVO(UUID resourceId) {}

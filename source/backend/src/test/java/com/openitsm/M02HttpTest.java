@@ -18,9 +18,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +34,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("local")
 class M02HttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry props) { M01IntegrationTest.properties(props); }
 
@@ -52,7 +52,7 @@ class M02HttpTest {
 
     @BeforeEach
     void setUp() {
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         admin = bootstrap.initialize("M02 Admin", "m02-admin@example.com", password);
     }
 
@@ -67,7 +67,7 @@ class M02HttpTest {
             request.header("Origin", "http://localhost:5173");
             if (browser.csrf() != null) request.header("X-CSRF-Token", browser.csrf());
         }
-        if (key != null) request.header("Idempotency-Key", key);
+
         if (body != null) request.header("Content-Type", "application/json");
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -122,7 +122,7 @@ class M02HttpTest {
             JsonNode result = data(response);
             UUID id = UUID.fromString(result.path("id").asText());
             assertThat(result.path("number").asText()).matches("ITSM-[1-9][0-9]*");
-            assertThat(result.path("replayed").asBoolean()).isFalse();
+
             numbers.add(result.path("number").asText());
             var stored = db.queryForMap("SELECT * FROM ticket WHERE id=?", id);
             assertThat(stored.get("number")).isEqualTo(result.path("number").asText());
@@ -139,27 +139,7 @@ class M02HttpTest {
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(3);
     }
 
-    @Test
-    void replayAndChangedOriginalFieldsNeverCreateAnotherTicket() throws Exception {
-        Browser browser = signed("m02-admin@example.com");
-        String key = UUID.randomUUID().toString();
-        var first = create(browser, fields(), key);
-        assertThat(first.statusCode()).isEqualTo(201);
-        // JSON property order is not part of the existing DTO-based digest.
-        var replay = call(browser, "POST", "/api/v1/tickets",
-            json.writeValueAsString(new java.util.TreeMap<>(fields())), key);
-        assertThat(replay.statusCode()).isEqualTo(201);
-        assertThat(data(replay).path("id")).isEqualTo(data(first).path("id"));
-        assertThat(data(replay).path("number")).isEqualTo(data(first).path("number"));
-        assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-        assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
-        for (String field : fields().keySet()) {
-            var changed = fields(); changed.put(field, field.equals("businessTypeId") ? UUID.randomUUID().toString() : changed.get(field) + " ");
-            error(create(browser, changed, key), 409, "IDEMPOTENCY_CONFLICT");
-        }
-        assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(1);
-        assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record WHERE operation='POST /api/v1/tickets'", Integer.class)).isEqualTo(1);
-    }
+
 
     @Test
     void invalidFieldsKeysAndUnknownFieldsDoNotPersistTickets() throws Exception {
@@ -183,10 +163,8 @@ class M02HttpTest {
             var extra = fields(); extra.put(field, "injected");
             error(create(browser, extra, UUID.randomUUID().toString()), 400, "VALIDATION_FAILED");
         }
-        error(create(browser, fields(), null), 400, "VALIDATION_FAILED");
-        error(create(browser, fields(), "not-a-uuid"), 400, "VALIDATION_FAILED");
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isZero();
-        assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record", Integer.class)).isZero();
+
     }
 
     @Test
@@ -196,38 +174,11 @@ class M02HttpTest {
         error(create(new Browser(browser.client(), null), fields(), UUID.randomUUID().toString()), 403, "CSRF_INVALID");
         var large = fields(); large.put("description", "x".repeat(256 * 1024));
         error(create(browser, large, UUID.randomUUID().toString()), 413, "REQUEST_TOO_LARGE");
-        for (String health : List.of("live", "ready")) {
-            var response = call(browser, "GET", "/health/" + health, null, null);
-            assertThat(response.statusCode()).isEqualTo(200);
-            assertThat(json.readTree(response.body()).path("status").asText()).isEqualTo("UP");
-        }
+
         assertThat(call(browser, "POST", "/api/v1/auth/logout", null, null).statusCode()).isEqualTo(204);
         error(create(browser, fields(), UUID.randomUUID().toString()), 401, "SESSION_EXPIRED");
         assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isZero();
     }
 
-    @Test
-    void concurrentRetriesCreateOnceAndDistinctKeysReceiveUniqueNumbers() throws Exception {
-        Browser browser = signed("m02-admin@example.com");
-        String key = UUID.randomUUID().toString();
-        try (var pool = Executors.newFixedThreadPool(2)) {
-            var start = new CountDownLatch(1);
-            var first = pool.submit(() -> { start.await(); return create(browser, fields(), key); });
-            var second = pool.submit(() -> { start.await(); return create(browser, fields(), key); });
-            start.countDown();
-            for (var response : List.of(first.get(20, TimeUnit.SECONDS), second.get(20, TimeUnit.SECONDS))) {
-                if (response.statusCode() == 409) error(response, 409, "REQUEST_IN_PROGRESS");
-                else assertThat(response.statusCode()).as(response.body()).isEqualTo(201);
-            }
-            assertThat(create(browser, fields(), key).statusCode()).isEqualTo(201);
-            assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(1);
-            assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record", Integer.class)).isEqualTo(1);
-            var third = pool.submit(() -> create(browser, fields(), UUID.randomUUID().toString()));
-            var fourth = pool.submit(() -> create(browser, fields(), UUID.randomUUID().toString()));
-            var a = third.get(20, TimeUnit.SECONDS); var b = fourth.get(20, TimeUnit.SECONDS);
-            assertThat(a.statusCode()).isEqualTo(201); assertThat(b.statusCode()).isEqualTo(201);
-            assertThat(data(a).path("number")).isNotEqualTo(data(b).path("number"));
-            assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(3);
-        }
-    }
+
 }

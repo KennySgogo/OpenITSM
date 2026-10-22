@@ -3,7 +3,6 @@ package com.openitsm.service.impl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.openitsm.ai.client.PythonAiClient;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.entity.SettingsEntity;
 import com.openitsm.mapper.*;
 import com.openitsm.service.*;
@@ -22,10 +21,8 @@ public class SettingsServiceImpl implements SettingsService {
     private final AiConnectionStatusMapper statuses;
     private final UserMapper users;
     private final TransactionLockMapper locks;
-    private final IdempotencyService idem;
     private final SessionService sessions;
     private final RuntimeSettingsService runtime;
-    private final AccountMailCipher cipher;
     private final RateLimitService limits;
     private final PythonAiClient python;
     private final Clock clock;
@@ -33,17 +30,14 @@ public class SettingsServiceImpl implements SettingsService {
     private final TransactionTemplate transaction;
 
     public SettingsServiceImpl(SettingsMapper settings, AiConnectionStatusMapper statuses, UserMapper users,
-        TransactionLockMapper locks, IdempotencyService idem, SessionService sessions, RuntimeSettingsService runtime,
-        AccountMailCipher cipher, RateLimitService limits, PythonAiClient python, Clock clock, Environment env,
+        TransactionLockMapper locks, SessionService sessions, RuntimeSettingsService runtime,
+        RateLimitService limits, PythonAiClient python, Clock clock, Environment env,
         PlatformTransactionManager transactions) {
-        this.settings = settings; this.statuses = statuses; this.users = users; this.locks = locks; this.idem = idem;
-        this.sessions = sessions; this.runtime = runtime; this.cipher = cipher; this.limits = limits;
+        this.settings = settings; this.statuses = statuses; this.users = users; this.locks = locks;
+        this.sessions = sessions; this.runtime = runtime; this.limits = limits;
         this.python = python; this.clock = clock; this.env = env; this.transaction = new TransactionTemplate(transactions);
     }
     private void requireAdmin(AuthContext context, boolean lock) {
-        var resolved = sessions.resolve(context.rawToken());
-        if (resolved.expired() || resolved.context().user() == null)
-            throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
         if (lock) locks.lock("MEMBERS", "CONTROL");
         var user = lock ? users.lock(context.user().id) : users.selectById(context.user().id);
         if (user == null || !"ACTIVE".equals(user.status) || user.authVersion != context.session().authVersion())
@@ -61,22 +55,16 @@ public class SettingsServiceImpl implements SettingsService {
     }
     private SettingsVO.StatusVO status(String kind, long version) {
         var status = statuses.find(kind);
-        if (status == null) return new SettingsVO.StatusVO("TEST".equals(kind) ? "NOT_TESTED" : "NO_CALLS", null, null, false, null);
+        if (status == null) return new SettingsVO.StatusVO("TEST".equals(kind) ? "NOT_TESTED" : "NO_CALLS", null, null, false);
         String state = "RUNNING".equals(status.status()) && status.occurredAt().plusSeconds(20).isBefore(clock.instant()) ? "AI_TIMEOUT" : status.status();
-        return new SettingsVO.StatusVO(state, status.configVersion(), status.occurredAt(), status.configVersion() == version, status.outputMode());
+        return new SettingsVO.StatusVO(state, status.configVersion(), status.occurredAt(), status.configVersion() == version);
     }
     @Transactional
-    public ActionVO update(AuthContext context, JsonNode body, String version, String key) {
-        long expected = Values.version(version);
+    public ActionVO update(AuthContext context, JsonNode body) {
         SettingsValidation.object(body, Set.of("teamName", "smtp", "model", "aiEnabled"), "body");
-        var requestKey = idem.key(key); var actor = context.user().id;
-        String operation = "PATCH /api/v1/settings", hash = idem.hash(body, version);
-        idem.reserve(actor, operation, requestKey); requireAdmin(context, true);
+        requireAdmin(context, true);
         locks.lock("SETTINGS", "SINGLETON");
-        var replay = idem.replay(actor, operation, requestKey, hash);
-        if (replay != null) return replay;
         var old = runtime.current();
-        if (old.version() != expected) throw new BusinessException(409, "VERSION_CONFLICT", "配置已更新，请刷新后重新确认");
         String team = SettingsValidation.text(body, "teamName", old.teamName(), 80, false);
         var smtp = old.smtp(); var model = old.model();
         if (body.has("smtp")) {
@@ -103,13 +91,12 @@ public class SettingsServiceImpl implements SettingsService {
         if (enabled && !model.configured()) throw new BusinessException(409, "INVALID_STATE", "请先配置完整模型连接，或同时关闭 AI");
         var row = new SettingsEntity(); row.version = old.version() + 1; row.teamName = team;
         row.smtpHost = smtp.host(); row.smtpPort = smtp.port(); row.smtpUsername = smtp.username(); row.smtpFrom = smtp.from(); row.smtpSecurity = smtp.security();
-        row.smtpPassword = seal(smtp.password(), "smtp"); row.modelBaseUrl = model.baseUrl(); row.modelName = model.model();
-        row.modelApiKey = seal(model.apiKey(), "model"); row.aiEnabled = enabled;
+        row.smtpPassword = smtp.password(); row.modelBaseUrl = model.baseUrl(); row.modelName = model.model();
+        row.modelApiKey = model.apiKey(); row.aiEnabled = enabled;
         if (settings.selectById(SettingsEntity.ID) == null) settings.insert(row); else settings.updateById(row);
         sessions.touch(context.session().hash());
-        return idem.save(actor, operation, requestKey, hash, SettingsEntity.ID, row.version, 200);
+        return new ActionVO(SettingsEntity.ID);
     }
-    private String seal(String value, String purpose) { return configured(value) ? cipher.seal(value, "settings:" + SettingsEntity.ID + ":" + purpose) : null; }
     private static boolean configured(String value) { return value != null && !value.isBlank(); }
 
     public ModelConnectionTestVO testModel(AuthContext context) {
@@ -127,17 +114,15 @@ public class SettingsServiceImpl implements SettingsService {
             return value;
         });
         BusinessException failure = null;
-        String mode = null;
-        try { mode = python.testConnection(snapshot.model()); }
+        try { python.testConnection(snapshot.model()); }
         catch (BusinessException ex) { failure = ex; }
         String state = failure == null ? "SUCCESS" : failure.code;
         Instant at = clock.instant();
-        String testedMode = mode;
-        transaction.executeWithoutResult(tx -> statuses.finishTest(attempt, state, at, testedMode));
+        transaction.executeWithoutResult(tx -> statuses.finish("TEST", attempt, state, at));
         if (failure != null) throw failure;
         return transaction.execute(tx -> {
             requireAdmin(context, false);
-            return new ModelConnectionTestVO(state, snapshot.version(), at, runtime.current().version() == snapshot.version(), testedMode);
+            return new ModelConnectionTestVO(state, snapshot.version(), at, runtime.current().version() == snapshot.version());
         });
     }
 }

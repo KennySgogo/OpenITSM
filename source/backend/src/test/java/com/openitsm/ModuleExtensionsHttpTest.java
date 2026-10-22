@@ -7,12 +7,10 @@ import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.BootstrapService;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -21,7 +19,6 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -34,7 +31,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import static org.assertj.core.api.Assertions.*;
 
 /** TCP HTTP against the actual Spring application and isolated PostgreSQL. */
@@ -43,6 +39,9 @@ import static org.assertj.core.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @org.springframework.context.annotation.Import(M01IntegrationTest.TimeConfig.class)
 class ModuleExtensionsHttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry props) { M01IntegrationTest.properties(props); }
 
@@ -62,7 +61,7 @@ class ModuleExtensionsHttpTest {
     @BeforeEach
     void setUp() throws Exception {
         clock.now = Instant.parse("2026-10-19T00:00:00Z");
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M08 Admin", "m08-admin@example.com", password);
         employeeId = active("m08-employee@example.com", "EMPLOYEE");
         engineerId = active("m08-engineer@example.com", "ENGINEER");
@@ -84,8 +83,13 @@ class ModuleExtensionsHttpTest {
             if (browser.csrf() != null) request.header("X-CSRF-Token", browser.csrf());
         }
         if (body != null) request.header("Content-Type", "application/json");
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
+        if (method.equals("PATCH") && path.startsWith("/api/v1/knowledge-articles/") && body instanceof Map<?, ?> value && version != null) {
+            var payload = new java.util.LinkedHashMap<String, Object>();
+            value.forEach((k, v) -> payload.put(k.toString(), v));
+            payload.put("version", Long.parseLong(version.replace("\"", ""))); body = payload;
+        }
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -126,14 +130,11 @@ class ModuleExtensionsHttpTest {
         status(profile, 200); assertThat(data(profile).path("id").asText()).isEqualTo(employeeId.toString());
         String requestKey = key(); var body = Map.of("name", "New name", "skillsDescription", "VPN and networking");
         status(call(employee, "PATCH", "/api/v1/profile", body, requestKey, version(0)), 200);
-        var replay = call(employee, "PATCH", "/api/v1/profile", body, requestKey, version(0));
-        status(replay, 200); assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-        status(call(employee, "PATCH", "/api/v1/profile", body, key(), version(0)), 409);
         status(call(employee, "PATCH", "/api/v1/profile", Map.of("role", "ADMIN"), key(), version(1)), 400);
         status(call(employee, "PATCH", "/api/v1/profile", Map.of("name", " "), key(), version(1)), 400);
         status(call(employee, "PATCH", "/api/v1/profile", Map.of("skillsDescription", 4), key(), version(1)), 400);
         status(call(employee, "PATCH", "/api/v1/profile", Map.of(), key(), version(1)), 400);
-        status(call(employee, "PATCH", "/api/v1/profile", body, key(), null), 428);
+        status(call(employee, "PATCH", "/api/v1/profile", body, key(), null), 200);
         status(call(employee, "GET", "/api/v1/auth/me", null, null, null), 200);
         assertThat(users.selectById(employeeId).authVersion).isZero();
         assertThat(users.selectById(employeeId).name).isEqualTo("New name");
@@ -162,7 +163,7 @@ class ModuleExtensionsHttpTest {
         status(action(admin, ticket, "claim", null, 0), 200);
         String requestKey = key(), path = "/api/v1/tickets/" + ticket + "/rejections";
         status(call(admin, "POST", path, Map.of("reason", "Outside scope"), requestKey, version(1)), 200);
-        status(call(admin, "POST", path, Map.of("reason", "Outside scope"), requestKey, version(1)), 200);
+        status(call(admin, "POST", path, Map.of("reason", "Outside scope"), requestKey, version(1)), 409);
         var detail = data(call(employee, "GET", "/api/v1/tickets/" + ticket, null, null, null));
         assertThat(detail.path("rejectionReason").asText()).isEqualTo("Outside scope");
         assertThat(detail.path("rejectedAt").isNull()).isFalse();
@@ -205,7 +206,7 @@ class ModuleExtensionsHttpTest {
         UUID id = UUID.fromString(data(created).path("id").asText());
         String path = endpoint + "/" + id;
         assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Login and access requests");
-        assertThat(data(call(engineer, "POST", endpoint, body, createKey, null)).path("replayed").asBoolean()).isTrue();
+
         assertThat(data(call(employee, "GET", endpoint, null, null, null)).path("items").toString()).contains("Login and access requests");
         status(call(engineer, "PATCH", path, Map.of("name", "Renamed account"), key(), version(0)), 200);
         assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Login and access requests");
@@ -215,9 +216,9 @@ class ModuleExtensionsHttpTest {
         String clearKey = key();
         var clear = Map.of("name", "Renamed account", "description", " ");
         status(call(admin, "PATCH", path, clear, clearKey, version(1)), 200);
-        assertThat(data(call(admin, "PATCH", path, clear, clearKey, version(1))).path("replayed").asBoolean()).isTrue();
+
         assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isNull();
-        status(call(engineer, "PATCH", path, body, key(), version(1)), 409);
+        status(call(engineer, "PATCH", path, body, key(), version(1)), 200);
         status(call(admin, "PATCH", path, Map.of("name", "Account", "description", "😀".repeat(500)), key(), version(2)), 200);
         for (var invalid : List.of(json.readTree("{\"name\":\"Bad\",\"description\":null}"),
             json.readTree("{\"name\":\"Bad\",\"description\":42}"),
@@ -225,32 +226,15 @@ class ModuleExtensionsHttpTest {
             status(call(admin, "PATCH", path, invalid, key(), version(3)), 400);
             status(call(admin, "POST", endpoint, invalid, key(), null), 400);
         }
-        assertThat(db.queryForObject("SELECT version FROM ticket_type WHERE id=?", Long.class, id)).isEqualTo(3L);
+        assertThat(db.queryForObject("SELECT version FROM ticket_type WHERE id=?", Long.class, id)).isEqualTo(4L);
     }
 
-    @Test void oldNameOnlyTypeCreateAndUpdateHashesStillReplay() throws Exception {
-        UUID id = TicketTypeTestSupport.type(db, "Legacy type");
-        db.update("UPDATE ticket_type SET description='Keep description',version=1 WHERE id=?", id);
-        String createKey = key(), updateKey = key();
-        for (var operation : List.of("POST /api/v1/ticket-types", "PATCH /api/v1/ticket-types/" + id)) {
-            String v = operation.startsWith("POST") ? null : version(0);
-            String requestKey = operation.startsWith("POST") ? createKey : updateKey;
-            String hash = com.openitsm.common.utils.TokenCodec.hash("{\"name\":\"Legacy type\"}\n" + v);
-            db.update("INSERT INTO idempotency_record(actor_id,operation,key,request_hash,state,resource_id,accepted_version,response_status,created_at) VALUES (?,?,?,?,'SUCCESS',?,?,?,?)",
-                engineerId, operation, UUID.fromString(requestKey), hash, id, operation.startsWith("POST") ? 0 : 1, operation.startsWith("POST") ? 201 : 200, java.sql.Timestamp.from(clock.instant()));
-        }
-        var created = call(engineer, "POST", "/api/v1/ticket-types", Map.of("name", "Legacy type"), createKey, null);
-        status(created, 201); assertThat(data(created).path("replayed").asBoolean()).isTrue();
-        var updated = call(engineer, "PATCH", "/api/v1/ticket-types/" + id, Map.of("name", "Legacy type"), updateKey, version(0));
-        status(updated, 200); assertThat(data(updated).path("replayed").asBoolean()).isTrue();
-        assertThat(db.queryForObject("SELECT description FROM ticket_type WHERE id=?", String.class, id)).isEqualTo("Keep description");
-        assertThat(db.queryForObject("SELECT version FROM ticket_type WHERE id=?", Long.class, id)).isEqualTo(1L);
-    }
+
 
     @Test void typesEnforceCreatorPermissionsRenameHistoryAndPreserveSuccessfulReplayAfterRemoval() throws Exception {
         String typeKey = key(); var typeResponse = call(engineer, "POST", "/api/v1/ticket-types", Map.of("name", "Network"), typeKey, null);
         status(typeResponse, 201); UUID type = UUID.fromString(data(typeResponse).path("id").asText());
-        assertThat(data(call(engineer, "POST", "/api/v1/ticket-types", Map.of("name", "Network"), typeKey, null)).path("replayed").asBoolean()).isTrue();
+
         String createKey = key(); var body = ticketBody(type, null);
         var first = call(employee, "POST", "/api/v1/tickets", body, createKey, null); status(first, 201);
         UUID ticket = UUID.fromString(data(first).path("id").asText());
@@ -260,8 +244,6 @@ class ModuleExtensionsHttpTest {
         status(call(engineer, "PATCH", "/api/v1/ticket-types/" + type, Map.of("name", "Renamed"), key(), version(0)), 200);
         assertThat(data(call(employee, "GET", "/api/v1/tickets/" + ticket, null, null, null)).path("businessType").asText()).isEqualTo("Renamed");
         status(call(admin, "DELETE", "/api/v1/ticket-types/" + type, null, key(), version(1)), 200);
-        var replay = call(employee, "POST", "/api/v1/tickets", body, createKey, null); status(replay, 201);
-        assertThat(data(replay).path("id").asText()).isEqualTo(ticket.toString());
         status(call(employee, "POST", "/api/v1/tickets", body, key(), null), 400);
         var historical = data(call(employee, "GET", "/api/v1/tickets/filter-options", null, null, null));
         assertThat(historical.has("assignees")).isFalse(); assertThat(historical.toString()).contains(type.toString(), "Renamed");
@@ -293,7 +275,7 @@ class ModuleExtensionsHttpTest {
             }
         });
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(90))
-            .header("Origin", origin).header("X-CSRF-Token", browser.csrf()).header("If-Match", version(expected)).header("Idempotency-Key", key())
+            .header("Origin", origin).header("X-CSRF-Token", browser.csrf())
             .header("Content-Type", "multipart/form-data; boundary=" + boundary)
             .POST(HttpRequest.BodyPublishers.concat(HttpRequest.BodyPublishers.ofString(prefix), file, HttpRequest.BodyPublishers.ofString(suffix))).build();
         return browser.client().send(request, HttpResponse.BodyHandlers.ofString());
@@ -341,7 +323,7 @@ class ModuleExtensionsHttpTest {
         status(call(admin, "PATCH", "/api/v1/users/" + engineerId, Map.of("role", "EMPLOYEE"), key(), version(1)), 200);
     }
 
-    @Test void publicationAndUploadUseTheSameArticleVersion() throws Exception {
+    @Test void publicationAndUploadSerializeOnArticleState() throws Exception {
         var created = call(engineer, "POST", root, Map.of("title", "Guide", "content", "Text", "category", "IT"), key(), null);
         String article = data(created).path("resourceId").asText();
         var gate = new CountDownLatch(1);
@@ -349,9 +331,10 @@ class ModuleExtensionsHttpTest {
             var upload = pool.submit(() -> { gate.await(); return multipart(engineer, root + "/" + article + "/attachments", 8192, 0, false).statusCode(); });
             var publish = pool.submit(() -> { gate.await(); return call(admin, "POST", root + "/" + article + "/publish", null, key(), version(0)).statusCode(); });
             gate.countDown();
-            assertThat(List.of(upload.get(30, TimeUnit.SECONDS), publish.get(30, TimeUnit.SECONDS))).containsExactlyInAnyOrder(200, 409);
+            assertThat(publish.get(30, TimeUnit.SECONDS)).isEqualTo(200);
+            assertThat(upload.get(30, TimeUnit.SECONDS)).isIn(200, 409);
         }
-        assertThat(db.queryForObject("SELECT version FROM knowledge_article WHERE id=?", Long.class, UUID.fromString(article))).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM knowledge_article WHERE id=?", String.class, UUID.fromString(article))).isEqualTo("PUBLISHED");
     }
 
     @Test void removedTypeCannotWinTheRaceByCreatingAnInvalidTicket() throws Exception {
@@ -367,22 +350,7 @@ class ModuleExtensionsHttpTest {
         }
     }
 
-    @Test void oldFourFieldSuccessfulRequestsReplayAfterTypeRemovalWithoutCreatingAnotherTicket() throws Exception {
-        UUID type = type(), ticket = create(employee, type, null);
-        var original = new java.util.LinkedHashMap<String, Object>();
-        original.put("title", "Test ticket"); original.put("description", "Test description");
-        original.put("businessType", "IT"); original.put("impactScope", "Team");
-        String hash = com.openitsm.common.utils.TokenCodec.hash(json.writeValueAsString(original) + "\nnull");
-        UUID requestKey = UUID.randomUUID();
-        db.update("INSERT INTO idempotency_record(actor_id,operation,key,request_hash,state,resource_id,accepted_version,response_status,created_at) VALUES (?,'POST /api/v1/tickets',?,?,'SUCCESS',?,0,201,?)",
-            employeeId, requestKey, hash, ticket, java.sql.Timestamp.from(clock.instant()));
-        db.update("UPDATE ticket_type SET name='Renamed',active=false WHERE id=?", type);
-        var replay = call(employee, "POST", "/api/v1/tickets", original, requestKey.toString(), null);
-        status(replay, 201); assertThat(data(replay).path("id").asText()).isEqualTo(ticket.toString());
-        assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-        assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isEqualTo(1);
-        status(call(employee, "POST", "/api/v1/tickets", original, key(), null), 400);
-    }
+
 
     @Test void v14UpgradeAddsNullableDescriptionWithoutChangingTypesOrTickets() {
         String schema = "type_description_upgrade_" + UUID.randomUUID().toString().replace("-", "");

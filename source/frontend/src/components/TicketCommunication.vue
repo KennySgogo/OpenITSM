@@ -27,9 +27,8 @@ const staff = computed(() => ['ENGINEER', 'ADMIN'].includes(sessionState.session
 const permitted = computed(() => !!sessionState.session && canReply(props.ticket, sessionState.session.user, model.internal));
 const form = ref<FormInstance>();
 const model = reactive({ content: '', internal: false });
-const pending = ref<{ path: string; body: { content: string }; version: number; key: string }>();
 const rules: FormRules = { content: [{ required: true, whitespace: true, message: '请填写回复内容', trigger: 'blur' }] };
-watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
+watch(() => busy.value, value => emit('lock', value), { immediate: true });
 
 async function loadReplies(page = replyPage.value, latest = false) {
   const current = ++replySequence;
@@ -73,22 +72,16 @@ watch(() => props.ticket.version, () => {
 }, { immediate: true });
 
 async function submit() {
-  if (blocked.value || props.refreshing || props.externalBlocked || (!pending.value && !permitted.value)) return;
+  if (blocked.value || props.refreshing || props.externalBlocked || !permitted.value) return;
   busy.value = true;
   try {
-    if (!pending.value) {
-      if (!await form.value?.validate().catch(() => false)) return;
-      pending.value = {
-        path: `/tickets/${props.ticket.id}/${model.internal ? 'internal-notes' : 'replies'}`,
-        body: { content: model.content }, version: props.ticket.version, key: crypto.randomUUID()
-      };
-    }
+    if (!await form.value?.validate().catch(() => false)) return;
     error.value = undefined;
-    const { path, ...options } = pending.value;
-    const result = await request<TicketAction>(path, { method: 'POST', ...options });
+    await request<TicketAction>(`/tickets/${props.ticket.id}/${model.internal ? 'internal-notes' : 'replies'}`, {
+      method: 'POST', body: { content: model.content }
+    });
     if (!alive) return;
-    ElMessage.success(result.replayed ? '此内容此前已发表，正在刷新工单' : model.internal ? '内部备注已添加' : '公开回复已发表');
-    pending.value = undefined;
+    ElMessage.success(model.internal ? '内部备注已添加' : '公开回复已发表');
     model.content = '';
     form.value?.clearValidate();
     followLatest = true;
@@ -97,9 +90,8 @@ async function submit() {
     if (!alive) return;
     showError(value);
     const failure = error.value!;
-    if (failure.status >= 400 && failure.status < 500 && !['REQUEST_IN_PROGRESS', 'RATE_LIMITED'].includes(failure.code)) {
-      pending.value = undefined;
-      if (['VERSION_CONFLICT', 'INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN', 'IDEMPOTENCY_CONFLICT'].includes(failure.code)) emit('refresh');
+    if (failure.status >= 400 && failure.status < 500 && !['RATE_LIMITED'].includes(failure.code)) {
+      if (['INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN'].includes(failure.code)) emit('refresh');
     }
   } finally { if (alive) busy.value = false; }
 }
@@ -120,14 +112,14 @@ async function submit() {
     <ElPagination v-if="replies && replies.total > replies.pageSize" :current-page="replyPage" :page-size="replies.pageSize" :total="replies.total" :disabled="repliesBusy" layout="total, prev, pager, next" @current-change="loadReplies($event)" />
     <div class="reply-editor">
       <ErrorNotice :error="error" />
-      <ElAlert v-if="pending && error" title="发表结果尚未确认，请重试原请求；内容、可见性与版本已保留，避免重复发表。" type="info" :closable="false" />
-      <template v-if="ticket.status !== 'CLOSED' || pending">
-        <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || !!pending || refreshing || externalBlocked" @submit.prevent="submit">
+
+      <template v-if="ticket.status !== 'CLOSED'">
+        <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || refreshing || externalBlocked" @submit.prevent="submit">
           <ElFormItem v-if="staff" label="发表方式"><ElRadioGroup v-model="model.internal" aria-label="发表方式"><ElRadioButton :value="false">公开回复</ElRadioButton><ElRadioButton :value="true">内部备注</ElRadioButton></ElRadioGroup></ElFormItem>
           <p class="visibility-hint">{{ model.internal ? '仅工程师和管理员可见，提单员工不可见。' : '公开回复对工单可见者开放，包含提单人。' }}</p>
           <ElFormItem :label="model.internal ? '备注内容' : '回复内容'" prop="content"><ElInput v-model="model.content" type="textarea" :rows="4" :placeholder="model.internal ? '填写内部备注' : '填写公开回复'" /></ElFormItem>
         </ElForm>
-        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (!pending && !permitted)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原请求' : model.internal ? '添加内部备注' : '发表公开回复' }}</ElButton></div>
+        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || !permitted" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : model.internal ? '添加内部备注' : '发表公开回复' }}</ElButton></div>
       </template>
       <p v-else class="muted">工单已关闭，不能追加回复。<RouterLink to="/tickets/new">新建工单</RouterLink></p>
     </div>

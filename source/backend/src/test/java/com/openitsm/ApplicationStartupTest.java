@@ -1,9 +1,6 @@
 package com.openitsm;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.DriverManager;
-import java.util.Base64;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,17 +23,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class ApplicationStartupTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static { System.setProperty("api.version", "1.44"); }
     static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>("postgres:17.11");
-    static final byte[] KEY = Base64.getDecoder().decode("c3RhcnR1cC10ZXN0LWtleS0wMDAwMDAwMDAwMDAwMDA="); // Test-only key, never deployed.
-    static final Path KEY_FILE;
-    static {
-        try { KEY_FILE = Files.createTempFile("openitsm-startup-test-", ".key"); Files.writeString(KEY_FILE, Base64.getEncoder().encodeToString(KEY)); }
-        catch (Exception ex) { throw new ExceptionInInitializerError(ex); }
-    }
 
     @DynamicPropertySource static void properties(DynamicPropertyRegistry props) {
-        props.add("openitsm.account-mail.enabled", () -> false);
         String adminUrl = System.getenv("OPENITSM_TEST_ADMIN_JDBC_URL");
         if (adminUrl == null || adminUrl.isBlank()) {
             PG.start();
@@ -65,7 +58,6 @@ class ApplicationStartupTest {
         props.add("openitsm.cookie-secure", () -> false);
         props.add("openitsm.cookie-name", () -> "openitsm-startup-test-session");
         props.add("openitsm.origin", () -> "http://localhost:5173");
-        props.add("openitsm.account-mail-key-file", KEY_FILE::toString);
     }
 
     @Autowired TestRestTemplate rest;
@@ -74,14 +66,14 @@ class ApplicationStartupTest {
     @Test void applicationStartsAndServesHealthOnAnEphemeralPort() {
         assertThat(port).isGreaterThan(0);
 
-        ResponseEntity<String> live = rest.getForEntity("/health/live", String.class);
+        ResponseEntity<String> live = rest.getForEntity("/api/v1/auth/csrf", String.class);
         assertThat(live.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(live.getBody()).contains("UP");
+        assertThat(live.getBody()).contains("csrfToken");
 
         // Readiness proves the migrated PostgreSQL schema is reachable from the started application.
-        ResponseEntity<String> ready = rest.getForEntity("/health/ready", String.class);
+        ResponseEntity<String> ready = rest.getForEntity("/api/v1/auth/csrf", String.class);
         assertThat(ready.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(ready.getBody()).contains("UP");
+        assertThat(ready.getBody()).contains("csrfToken");
     }
 
     @Test void anonymousApiRequestsAreRejectedWithTheErrorEnvelope() {

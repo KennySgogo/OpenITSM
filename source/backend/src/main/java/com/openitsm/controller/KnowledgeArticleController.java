@@ -30,30 +30,25 @@ public class KnowledgeArticleController {
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody SaveKnowledgeArticleRequest body,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return response(request, service.create(RequestAuthentication.from(request), body, key), 201);
+    public ResponseEntity<?> create(@RequestBody SaveKnowledgeArticleRequest body, HttpServletRequest request) {
+        return response(request, service.create(RequestAuthentication.from(request), body), 201);
     }
 
     @PatchMapping("/{id}")
-    public ResponseEntity<?> edit(@PathVariable UUID id, @RequestBody SaveKnowledgeArticleRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return response(request, service.change(RequestAuthentication.from(request), id, "edit", body, version, key), 200);
+    public ResponseEntity<?> edit(@PathVariable UUID id, @RequestBody SaveKnowledgeArticleRequest body, HttpServletRequest request) {
+        return response(request, service.change(RequestAuthentication.from(request), id, "edit", body), 200);
     }
 
     @PostMapping({"/{id}/publish", "/{id}/unpublish"})
-    public ResponseEntity<?> publish(@PathVariable UUID id, @RequestBody(required = false) Map<String, Object> body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
+    public ResponseEntity<?> publish(@PathVariable UUID id, @RequestBody(required = false) Map<String, Object> body, HttpServletRequest request) {
         RequestAuthentication.emptyBody(body);
         String action = request.getRequestURI().substring(request.getRequestURI().lastIndexOf('/') + 1);
-        return response(request, service.change(RequestAuthentication.from(request), id, action, null, version, key), 200);
+        return response(request, service.change(RequestAuthentication.from(request), id, action, null), 200);
     }
 
     private ResponseEntity<?> response(HttpServletRequest request, ActionVO result, int status) {
-        var response = ResponseEntity.status(status).eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+        var response = ResponseEntity.status(status);
+
         return response.body(ApiResponse.of(request, result));
     }
 }

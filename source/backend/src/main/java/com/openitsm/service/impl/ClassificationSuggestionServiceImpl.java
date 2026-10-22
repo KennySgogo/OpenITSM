@@ -5,6 +5,8 @@ import com.openitsm.ai.client.PythonAiClient;
 import com.openitsm.common.exception.BusinessException;
 import com.openitsm.entity.TicketEntity;
 import com.openitsm.entity.TicketTypeEntity;
+import com.openitsm.entity.UserEntity;
+import com.openitsm.dto.CreateTicketClassificationSuggestionRequest;
 import com.openitsm.mapper.AiConnectionStatusMapper;
 import com.openitsm.mapper.TicketMapper;
 import com.openitsm.mapper.TicketTypeMapper;
@@ -41,25 +43,31 @@ public class ClassificationSuggestionServiceImpl implements ClassificationSugges
     @Override
     public ClassificationSuggestionVO suggest(AuthContext context, UUID ticketId) {
         var ticket = eligibleTicket(context, ticketId);
+        return compute(context, ticketId, ticket.title, ticket.description, ticket.impactScope);
+    }
+
+    @Override
+    public ClassificationSuggestionVO suggestBeforeCreate(AuthContext context, CreateTicketClassificationSuggestionRequest body) {
+        activeUser(context);
+        return compute(context, null, body.title(), body.description(), body.impactScope());
+    }
+
+    private ClassificationSuggestionVO compute(AuthContext context, UUID ticketId, String title, String description, String impactScope) {
         var settings = runtime.requireAiConnection();
         List<TicketTypeEntity> candidates = types.selectList(new QueryWrapper<TicketTypeEntity>()
             .eq("active", true).orderByAsc("name", "id"));
         if (candidates.isEmpty()) {
             runtime.recheckAiConnection(settings.version());
-            eligibleTicket(context, ticketId);
+            recheckAccess(context, ticketId);
             return new ClassificationSuggestionVO(null, null, null);
         }
-        var verified = statuses.find("TEST");
-        if (verified == null || verified.configVersion() != settings.version() || !"SUCCESS".equals(verified.status())
-            || !Set.of("JSON_SCHEMA", "TOOL_CALL").contains(verified.outputMode() == null ? "" : verified.outputMode()))
-            throw new BusinessException(503, "AI_CAPABILITY_NOT_VERIFIED", "请管理员先测试当前配置的结构化输出能力");
         UUID attempt = UUID.randomUUID();
         statuses.begin("CALL", settings.version(), clock.instant(), attempt);
         try {
-            var suggestion = python.suggestClassification(settings.model(), ticket.title, ticket.description, ticket.impactScope,
-                candidates.stream().map(type -> new PythonAiClient.BusinessTypeCandidate(type.id, type.name, type.description)).toList(), verified.outputMode());
+            var suggestion = python.suggestClassification(settings.model(), title, description, impactScope,
+                candidates.stream().map(type -> new PythonAiClient.BusinessTypeCandidate(type.id, type.name, type.description)).toList());
             runtime.recheckAiConnection(settings.version());
-            eligibleTicket(context, ticketId);
+            recheckAccess(context, ticketId);
             if (suggestion.businessTypeId() != null) {
                 var selected = types.selectById(suggestion.businessTypeId());
                 if (selected == null || !selected.active)
@@ -73,13 +81,23 @@ public class ClassificationSuggestionServiceImpl implements ClassificationSugges
         }
     }
 
-    private TicketEntity eligibleTicket(AuthContext context, UUID id) {
+    private void recheckAccess(AuthContext context, UUID ticketId) {
+        if (ticketId == null) activeUser(context);
+        else eligibleTicket(context, ticketId);
+    }
+
+    private UserEntity activeUser(AuthContext context) {
         var resolved = sessions.resolve(context.rawToken());
         if (resolved.expired() || resolved.context().user() == null)
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
         var actor = users.selectById(context.user().id);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
+        return actor;
+    }
+
+    private TicketEntity eligibleTicket(AuthContext context, UUID id) {
+        var actor = activeUser(context);
         var ticket = tickets.selectById(id);
         if (ticket == null || ("EMPLOYEE".equals(actor.role) && !actor.id.equals(ticket.requesterId)))
             throw new BusinessException(404, "RESOURCE_NOT_FOUND", "工单不存在或不可访问");

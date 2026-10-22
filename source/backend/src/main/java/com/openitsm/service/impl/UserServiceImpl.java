@@ -5,7 +5,6 @@ import com.openitsm.service.AuthContext;
 import com.openitsm.service.AccountTokenService;
 import com.openitsm.service.RateLimitService;
 import com.openitsm.service.SessionService;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.UserService;
 import com.openitsm.common.exception.BusinessException;
 import com.openitsm.mapper.TransactionLockMapper;
@@ -33,13 +32,12 @@ public class UserServiceImpl implements UserService {
     private final AccountTokenService tokens;
     private final RateLimitService rates;
     private final TransactionLockMapper locks;
-    private final IdempotencyService idem;
     private final TicketMapper tickets;
     private final AuditService audit;
     private final Clock clock;
 
-    public UserServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, TransactionLockMapper locks, IdempotencyService idem, TicketMapper tickets, AuditService audit, Clock clock) {
-        this.users = users; this.sessions = sessions; this.tokens = tokens; this.rates = rates; this.locks = locks; this.idem = idem; this.tickets = tickets;
+    public UserServiceImpl(UserMapper users, SessionService sessions, AccountTokenService tokens, RateLimitService rates, TransactionLockMapper locks, TicketMapper tickets, AuditService audit, Clock clock) {
+        this.users = users; this.sessions = sessions; this.tokens = tokens; this.rates = rates; this.locks = locks; this.tickets = tickets;
         this.audit = audit; this.clock = clock;
     }
 
@@ -74,17 +72,11 @@ public class UserServiceImpl implements UserService {
     }
 
     @Transactional
-    public ActionVO invite(AuthContext ctx, InviteUserRequest body, String keyHeader, UUID requestId) {
+    public ActionVO invite(AuthContext ctx, InviteUserRequest body, UUID requestId) {
         String name = Values.text(body.name(), "name", 1, 80);
         String email = Values.email(body.email());
         String role = role(body.role());
-        UUID key = idem.key(keyHeader);
-        String operation = "POST /api/v1/users";
-        String hash = idem.hash(body, null);
-        idem.reserve(ctx.user().id, operation, key);
         UserEntity actor = actor(ctx);
-        var previous = idem.replay(actor.id, operation, key, hash);
-        if (previous != null) return previous;
         if (users.lockEmail(email) != null) throw new BusinessException(409, "EMAIL_EXISTS", "该邮箱已存在");
         rates.check("INVITE_EMAIL", email, 5, Duration.ofHours(1), 60);
         UserEntity user = new UserEntity();
@@ -94,23 +86,15 @@ public class UserServiceImpl implements UserService {
         invitation(user);
         audit.append(actor.id, "MEMBER_INVITED", user.id, Map.of("role", role, "status", "INVITED"), null, requestId);
         sessions.touch(ctx.session().hash());
-        return idem.save(actor.id, operation, key, hash, user.id, user.version, 201);
+        return new ActionVO(user.id);
     }
 
     @Transactional
     public ActionVO change(AuthContext ctx, UUID id, String action, UpdateUserRequest patch, String reason,
-        String versionHeader, String keyHeader, UUID requestId) {
-        long expectedVersion = Values.version(versionHeader);
-        UUID key = idem.key(keyHeader);
-        String operation = (action.equals("PATCH") ? "PATCH " : "POST ") + "/api/v1/users/" + id + (action.equals("PATCH") ? "" : "/" + action);
-        String hash = idem.hash(patch == null ? reason : patch, versionHeader);
-        idem.reserve(ctx.user().id, operation, key);
+        UUID requestId) {
         UserEntity actor = actor(ctx);
         UserEntity user = users.lock(id);
         if (user == null) throw new BusinessException(404, "RESOURCE_NOT_FOUND", "资源不存在或不可访问");
-        var previous = idem.replay(actor.id, operation, key, hash);
-        if (previous != null) return previous;
-        if (user.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "成员已更新，请刷新后重试");
         var changes = new LinkedHashMap<String, Object>();
         switch (action) {
             case "PATCH" -> {
@@ -148,7 +132,7 @@ public class UserServiceImpl implements UserService {
         users.updateById(user);
         audit.append(actor.id, "MEMBER_" + action.toUpperCase(Locale.ROOT).replace('-', '_'), id, changes, reason, requestId);
         sessions.touch(ctx.session().hash());
-        return idem.save(actor.id, operation, key, hash, id, user.version, action.equals("invitation-resend") ? 202 : 200);
+        return new ActionVO(id);
     }
 
     private void lastAdmin(UserEntity user) {

@@ -17,15 +17,13 @@ public class SettingsController {
     @GetMapping
     public ResponseEntity<?> detail(HttpServletRequest request) {
         var value = service.detail(RequestAuthentication.from(request));
-        return ResponseEntity.ok().eTag("\"" + value.version() + "\"").body(ApiResponse.of(request, value));
+        return ResponseEntity.ok().body(ApiResponse.of(request, value));
     }
     @PatchMapping
-    public ResponseEntity<?> update(@RequestBody JsonNode body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        var value = service.update(RequestAuthentication.from(request), body, version, key);
-        var response = ResponseEntity.ok().eTag("\"" + value.acceptedVersion() + "\"");
-        if (value.replayed()) response.header("Idempotent-Replayed", "true");
+    public ResponseEntity<?> update(@RequestBody JsonNode body, HttpServletRequest request) {
+        var value = service.update(RequestAuthentication.from(request), body);
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, value));
     }
     @PostMapping("/model-connection-tests")

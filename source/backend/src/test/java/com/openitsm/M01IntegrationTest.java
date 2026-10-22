@@ -1,7 +1,6 @@
 package com.openitsm;
 
 import com.openitsm.service.RateLimitService;
-import com.openitsm.service.impl.AccountMailCipher;
 import com.openitsm.common.utils.TokenCodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,15 +13,11 @@ import com.openitsm.entity.UserEntity;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.UserService;
 import jakarta.servlet.http.Cookie;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.sql.DriverManager;
-import javax.crypto.Cipher;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -45,17 +40,14 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class M01IntegrationTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static { System.setProperty("api.version", "1.44"); }
     static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>("postgres:17.11");
     static String testDatabase;
-    static final byte[] KEY = Base64.getDecoder().decode("bTAxLWludGVncmF0aW9uLXRlc3Qta2V5LTAwMDAwMDA="); // Test-only key, never deployed.
-    static final Path KEY_FILE;
-    static {
-        try { KEY_FILE = Files.createTempFile("openitsm-m01-test-", ".key"); Files.writeString(KEY_FILE, Base64.getEncoder().encodeToString(KEY)); }
-        catch (Exception ex) { throw new ExceptionInInitializerError(ex); }
-    }
     @DynamicPropertySource static void properties(DynamicPropertyRegistry props) {
-        props.add("openitsm.account-mail.enabled", () -> false);
+        props.add("spring.datasource.hikari.maximum-pool-size", () -> 3);
         String adminUrl = System.getenv("OPENITSM_TEST_ADMIN_JDBC_URL");
         if (adminUrl == null || adminUrl.isBlank()) {
             PG.start();
@@ -84,7 +76,6 @@ class M01IntegrationTest {
         props.add("openitsm.cookie-secure", () -> false);
         props.add("openitsm.cookie-name", () -> "openitsm-test-session");
         props.add("openitsm.origin", () -> "http://localhost:5173");
-        props.add("openitsm.account-mail-key-file", KEY_FILE::toString);
     }
 
     static class TestClock extends Clock {
@@ -113,7 +104,7 @@ class M01IntegrationTest {
     @BeforeEach void setUp() {
         clock.now = Instant.parse("2026-10-14T02:00:00Z");
         // Only this disposable container's test database is reset, never a configured user database.
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         db.execute("TRUNCATE ticket_attachment,ticket_reply,notification_task,ticket");
         admin = bootstrap.initialize("Admin", "admin@example.com", password);
         TicketTypeTestSupport.type(db, "Test");
@@ -149,17 +140,12 @@ class M01IntegrationTest {
         users.insert(u); return u.id;
     }
     UUID invite(Browser browser, String email, String role) throws Exception {
-        MvcResult result = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", UUID.randomUUID())
+        MvcResult result = http.perform(write(post("/api/v1/users"), browser)
             .content(json.writeValueAsString(Map.of("name", "Invited", "email", email, "role", role)))).andReturn();
         assertStatus(result, 201); return UUID.fromString(data(result).get("resourceId").asText());
     }
     String mailedToken(UUID userId, String purpose) throws Exception {
-        var row = db.queryForMap("SELECT sealed_payload,token_generation FROM notification_task WHERE recipient_id=? AND template=? AND status='PENDING'", userId, purpose);
-        String[] sealed = row.get("sealed_payload").toString().split("\\.");
-        var cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY, "AES"), new GCMParameterSpec(128, Base64.getDecoder().decode(sealed[0])));
-        cipher.updateAAD((userId + ":" + purpose + ":" + row.get("token_generation")).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return new String(cipher.doFinal(Base64.getDecoder().decode(sealed[1])), java.nio.charset.StandardCharsets.UTF_8);
+        return db.queryForObject("SELECT delivery_token FROM notification_task WHERE recipient_id=? AND template=? AND status='PENDING'", String.class, userId, purpose);
     }
     MvcResult consume(Browser browser, String route, String token, String pass) throws Exception {
         return http.perform(write(post("/api/v1/auth/" + route), browser)
@@ -167,7 +153,7 @@ class M01IntegrationTest {
     }
     MvcResult memberAction(Browser browser, UUID id, String action, long version, String body) throws Exception {
         return http.perform(write(post("/api/v1/users/" + id + "/" + action), browser)
-            .header("If-Match", "\"" + version + "\"").header("Idempotency-Key", UUID.randomUUID()).content(body == null ? "" : body)).andReturn();
+            .content(body == null ? "" : body)).andReturn();
     }
 
     @Test void allRolesCanReturnToCreateTicketAfterLogin() throws Exception {
@@ -182,7 +168,7 @@ class M01IntegrationTest {
 
     @Test void databaseAndMigrationAreRealPostgres17() {
         assertThat(db.queryForObject("SHOW server_version", String.class)).startsWith("17.");
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(16);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(18);
         assertThat(db.queryForObject("SELECT count(*) FROM account_bootstrap", Integer.class)).isEqualTo(1);
         assertThatThrownBy(() -> bootstrap.initialize("Second", "second@example.com", password)).isInstanceOf(BusinessException.class).hasMessage("初始化入口已关闭");
     }
@@ -272,11 +258,11 @@ class M01IntegrationTest {
         assertStatus(http.perform(get("/api/v1/auth/me").cookie(fresh.cookie())).andReturn(), 401);
     }
 
-    @Test void invitationIsAtomicSingleUseEncryptedAndPurposeScoped() throws Exception {
+    @Test void invitationIsAtomicSingleUseAndPurposeScoped() throws Exception {
         UUID user = invite(signed("admin@example.com"), "new@example.com", "ENGINEER");
         String raw = mailedToken(user, "INVITE");
         assertThat(db.queryForObject("SELECT token_hash FROM account_token WHERE user_id=?", String.class, user)).isEqualTo(TokenCodec.hash(raw));
-        assertThat(db.queryForObject("SELECT sealed_payload FROM notification_task WHERE recipient_id=?", String.class, user)).doesNotContain(raw);
+        assertThat(db.queryForObject("SELECT delivery_token FROM notification_task WHERE recipient_id=?", String.class, user)).isEqualTo(raw);
         Browser anon = anonymous();
         assertStatus(consume(anon, "password-resets", raw, password), 409);
         assertStatus(login(anon, "new@example.com", password, null), 401);
@@ -330,78 +316,9 @@ class M01IntegrationTest {
         assertStatus(consume(anon, "password-resets", current, password), 409);
     }
 
-    @Test void memberVersionIdempotencyAndAuditAreEnforced() throws Exception {
-        Browser browser = signed("admin@example.com"); UUID key = UUID.randomUUID();
-        String body = "{\"name\":\"New\",\"email\":\"new@example.com\",\"role\":\"EMPLOYEE\"}";
-        var first = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key).content(body)).andReturn(); assertStatus(first, 201);
-        var replay = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key).content("{\"role\":\"EMPLOYEE\",\"email\":\"new@example.com\",\"name\":\"New\"}")).andReturn();
-        assertStatus(replay, 201); assertThat(replay.getResponse().getHeader("Idempotent-Replayed")).isEqualTo("true");
-        UUID user = UUID.fromString(data(first).get("resourceId").asText());
-        assertStatus(http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key).content(body.replace("New", "Different"))).andReturn(), 409);
-        assertStatus(http.perform(write(patch("/api/v1/users/" + user), browser).header("Idempotency-Key", UUID.randomUUID()).content("{\"name\":\"Changed\"}")).andReturn(), 428);
-        assertStatus(memberAction(browser, user, "unlock", 0, null), 200);
-        assertStatus(memberAction(browser, user, "unlock", 0, null), 409);
-        assertThat(db.queryForObject("SELECT count(*) FROM audit_event WHERE object_id=?", Integer.class, user)).isEqualTo(2);
-        var list = http.perform(get("/api/v1/users").cookie(browser.cookie())).andReturn(); assertStatus(list, 200);
-        assertThat(data(list).get("pageSize").asInt()).isEqualTo(20);
-        assertThat(list.getResponse().getContentAsString()).doesNotContain("passwordHash", "failedCount", "token_hash");
-    }
 
-    @Test void memberWritesValidateVersionsBeforeReplayAndRejectChangedBodies() throws Exception {
-        Browser browser = signed("admin@example.com");
-        for (String action : List.of("PATCH", "unlock", "invitation-resend", "disable")) {
-            UUID id = invite(browser, action.toLowerCase(Locale.ROOT) + "-contract@example.com", "EMPLOYEE");
-            if (action.equals("invitation-resend")) clock.advance(60);
-            String path = "/api/v1/users/" + id + (action.equals("PATCH") ? "" : "/" + action);
-            String body = switch (action) {
-                case "PATCH" -> "{\"name\":\"Changed\"}";
-                case "disable" -> "{\"reason\":\"Leaving company\"}";
-                default -> "";
-            };
-            UUID key = UUID.randomUUID();
-            var missing = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("Idempotency-Key", key).content(body)).andReturn();
-            assertStatus(missing, 428);
-            assertThat(code(missing)).isEqualTo("PRECONDITION_REQUIRED");
-            var stale = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("If-Match", "\"99\"").header("Idempotency-Key", key).content(body)).andReturn();
-            assertStatus(stale, 409);
-            assertThat(code(stale)).isEqualTo("VERSION_CONFLICT");
-            var first = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(body)).andReturn();
-            int success = action.equals("invitation-resend") ? 202 : 200;
-            assertStatus(first, success);
-            assertThat(data(first).get("acceptedVersion").asLong()).isEqualTo(1);
-            var replay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(body)).andReturn();
-            assertStatus(replay, success);
-            assertThat(replay.getResponse().getHeader("Idempotent-Replayed")).isEqualTo("true");
-            assertThat(data(replay).get("replayed").asBoolean()).isTrue();
-            var missingOnReplay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("Idempotency-Key", key).content(body)).andReturn();
-            assertStatus(missingOnReplay, 428);
-            assertThat(code(missingOnReplay)).isEqualTo("PRECONDITION_REQUIRED");
-            var malformedOnReplay = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                .header("If-Match", "0").header("Idempotency-Key", key).content(body)).andReturn();
-            assertStatus(malformedOnReplay, 400);
-            assertThat(code(malformedOnReplay)).isEqualTo("VALIDATION_FAILED");
-            if (!body.isEmpty()) {
-                String changed = body.replace("Changed", "Different").replace("Leaving company", "Different reason");
-                var conflict = http.perform(write(action.equals("PATCH") ? patch(path) : post(path), browser)
-                    .header("If-Match", "\"0\"").header("Idempotency-Key", key).content(changed)).andReturn();
-                assertStatus(conflict, 409);
-                assertThat(code(conflict)).isEqualTo("IDEMPOTENCY_CONFLICT");
-            }
-            assertThat(users.selectById(id).version).isEqualTo(1);
-            assertThat(db.queryForObject("SELECT count(*) FROM audit_event WHERE object_id=?", Integer.class, id)).isEqualTo(2);
-            assertThat(db.queryForObject("SELECT count(*) FROM notification_task WHERE recipient_id=?", Integer.class, id))
-                .isEqualTo(action.equals("invitation-resend") ? 2 : 1);
-            assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record WHERE resource_id=?", Integer.class, id)).isEqualTo(2);
-            if (action.equals("PATCH")) assertThat(users.selectById(id).name).isEqualTo("Changed");
-            if (action.equals("disable")) assertThat(db.queryForObject(
-                "SELECT reason FROM audit_event WHERE object_id=? AND action='MEMBER_DISABLE'", String.class, id)).isEqualTo("Leaving company");
-        }
-    }
+
+
 
     @Test void lastAdminHandoffDisableRoleRevocationAndUnlock() throws Exception {
         Browser browser = signed("admin@example.com");
@@ -411,8 +328,8 @@ class M01IntegrationTest {
         var blocked = memberAction(browser, engineer, "disable", 0, "{\"reason\":\"Leaving company\"}");
         assertStatus(blocked, 409); assertThat(code(blocked)).isEqualTo("MEMBER_HAS_OPEN_TICKETS");
         assertThat(blocked.getResponse().getContentAsString()).contains("1");
-        assertStatus(http.perform(write(patch("/api/v1/users/" + engineer), browser).header("If-Match", "\"0\"")
-            .header("Idempotency-Key", UUID.randomUUID()).content("{\"role\":\"EMPLOYEE\"}")).andReturn(), 409);
+        assertStatus(http.perform(write(patch("/api/v1/users/" + engineer), browser)
+            .content("{\"role\":\"EMPLOYEE\"}")).andReturn(), 409);
         db.update("UPDATE ticket SET status='CLOSED' WHERE assignee_id=?", engineer);
         for (int i = 0; i < 5; i++) auth.login("engineer@example.com", "WrongPassword123", null);
         assertStatus(memberAction(browser, engineer, "unlock", 0, null), 200); assertThat(users.selectById(engineer).lockedUntil).isNull();
@@ -420,8 +337,8 @@ class M01IntegrationTest {
         assertStatus(http.perform(get("/api/v1/auth/me").cookie(engineerBrowser.cookie())).andReturn(), 401);
         assertStatus(login(anonymous(), "engineer@example.com", password, null), 401);
         UUID another = active("another@example.com", "ENGINEER"); Browser anotherBrowser = signed("another@example.com");
-        assertStatus(http.perform(write(patch("/api/v1/users/" + another), browser).header("If-Match", "\"0\"")
-            .header("Idempotency-Key", UUID.randomUUID()).content("{\"role\":\"EMPLOYEE\"}")).andReturn(), 200);
+        assertStatus(http.perform(write(patch("/api/v1/users/" + another), browser)
+            .content("{\"role\":\"EMPLOYEE\"}")).andReturn(), 200);
         assertStatus(http.perform(get("/api/v1/auth/me").cookie(anotherBrowser.cookie())).andReturn(), 401);
     }
 
@@ -437,26 +354,11 @@ class M01IntegrationTest {
         assertThat(users.activeAdmins()).isEqualTo(1);
     }
     int changeResult(AuthContext ctx, UUID target) {
-        try { members.change(ctx, target, "disable", null, "Leaving company", "\"0\"", UUID.randomUUID().toString(), UUID.randomUUID()); return 200; }
+        try { members.change(ctx, target, "disable", null, "Leaving company", UUID.randomUUID()); return 200; }
         catch (BusinessException ex) { return ex.status; }
     }
 
-    @Test void missingMailKeyRollsBackInviteAndDoesNotRevealResetIdentity() throws Exception {
-        var badQueue = new AccountMailCipher("");
-        assertThatThrownBy(badQueue::requireReady).isInstanceOf(BusinessException.class);
-        // Transaction rollback is tested through a failing enqueue by temporarily moving the test key's content aside in memory.
-        String saved = Files.readString(KEY_FILE);
-        try {
-            Files.writeString(KEY_FILE, "invalid-test-key");
-            Browser browser = signed("admin@example.com");
-            var invite = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", UUID.randomUUID())
-                .content("{\"name\":\"New\",\"email\":\"new@example.com\",\"role\":\"EMPLOYEE\"}")).andReturn();
-            assertStatus(invite, 503);
-            assertThat(users.selectCount(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<UserEntity>().eq("email_normalized", "new@example.com"))).isZero();
-            Browser anon = anonymous();
-            for (String email : List.of("admin@example.com", "absent@example.com")) assertStatus(http.perform(write(post("/api/v1/auth/password-reset-requests"), anon).content(json.writeValueAsString(Map.of("email", email)))).andReturn(), 503);
-        } finally { Files.writeString(KEY_FILE, saved); }
-    }
+
 
     @Test void passwordUnicodeAndUnsafeRedirectInputsAreChecked() throws Exception {
         assertThatThrownBy(() -> Values.password("abcdefghijk", "abcdefghijk")).isInstanceOf(BusinessException.class);
@@ -485,21 +387,7 @@ class M01IntegrationTest {
         assertStatus(adminReturn, 200); assertThat(data(adminReturn).get("redirectPath").asText()).isEqualTo("/tickets/" + otherTicket);
     }
 
-    @Test void sameKeyInFlightConflictIsImmediateEvenWithMemberLockHeld() throws Exception {
-        Browser browser = signed("admin@example.com"); UUID key = UUID.randomUUID();
-        try (var connection = db.getDataSource().getConnection()) {
-            connection.setAutoCommit(false);
-            try (var lock = connection.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?,0))")) {
-                lock.setString(1, "IDEMPOTENCY:" + admin + ":POST /api/v1/users:" + key); lock.execute();
-                lock.setString(1, "MEMBERS:CONTROL"); lock.execute();
-            }
-            var result = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key)
-                .content("{\"name\":\"New\",\"email\":\"new@example.com\",\"role\":\"EMPLOYEE\"}")).andReturn();
-            assertStatus(result, 409); assertThat(code(result)).isEqualTo("REQUEST_IN_PROGRESS");
-            assertThat(result.getResponse().getHeader("Retry-After")).isEqualTo("1");
-            connection.rollback();
-        }
-    }
+
 
     @Test void concurrentSingleUseActivationHasOnlyOneWinner() throws Exception {
         UUID user = invite(signed("admin@example.com"), "new@example.com", "EMPLOYEE");
@@ -559,17 +447,17 @@ class M01IntegrationTest {
         var flyway = org.flywaydb.core.Flyway.configure().dataSource(db.getDataSource()).load();
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
-        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(16);
+        assertThat(db.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Integer.class)).isEqualTo(18);
     }
 
-    @Test void protocolErrorsAreClientErrorsAndIdempotencyCoversOriginalValues() throws Exception {
+    @Test void protocolErrorsAreClientErrorsAndEmailUniquenessCoversOriginalValues() throws Exception {
         Browser browser = signed("admin@example.com");
         assertStatus(http.perform(write(post("/api/v1/auth/me"), browser)).andReturn(), 405);
         assertStatus(http.perform(write(post("/api/v1/auth/login"), browser).contentType("text/plain").content("{}")).andReturn(), 415);
         UUID key = UUID.randomUUID();
         String body = "{\"name\":\"New\",\"email\":\"new@example.com\",\"role\":\"EMPLOYEE\"}";
-        assertStatus(http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key).content(body)).andReturn(), 201);
-        var changed = http.perform(write(post("/api/v1/users"), browser).header("Idempotency-Key", key).content(body.replace("new@example.com", "NEW@example.com"))).andReturn();
-        assertStatus(changed, 409); assertThat(code(changed)).isEqualTo("IDEMPOTENCY_CONFLICT");
+        assertStatus(http.perform(write(post("/api/v1/users"), browser).content(body)).andReturn(), 201);
+        var changed = http.perform(write(post("/api/v1/users"), browser).content(body.replace("new@example.com", "NEW@example.com"))).andReturn();
+        assertStatus(changed, 409); assertThat(code(changed)).isEqualTo("EMAIL_EXISTS");
     }
 }

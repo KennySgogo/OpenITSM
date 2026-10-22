@@ -28,9 +28,11 @@ import static org.assertj.core.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @org.springframework.context.annotation.Import(M01IntegrationTest.TimeConfig.class)
 class M14HttpTest {
-    static final String TOKEN = "m14-private-http-test-token-1234567890";
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static final AtomicInteger CALLS = new AtomicInteger();
-    static volatile String response = "{\"status\":\"SUCCESS\",\"outputMode\":\"JSON_SCHEMA\"}";
+    static volatile String response = "{\"status\":\"SUCCESS\"}";
     static volatile int responseCode = 200;
     static volatile CountDownLatch entered, release;
     static final HttpServer PYTHON;
@@ -40,7 +42,7 @@ class M14HttpTest {
             PYTHON.createContext("/internal/v1/model-connection-tests", exchange -> {
                 CALLS.incrementAndGet();
                 String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                if (!("Bearer " + TOKEN).equals(exchange.getRequestHeaders().getFirst("Authorization")) || request.contains("smtp") || request.contains("ticket")) {
+                if (request.contains("smtp") || request.contains("ticket")) {
                     exchange.sendResponseHeaders(401, -1); exchange.close(); return;
                 }
                 if (entered != null) entered.countDown();
@@ -55,7 +57,6 @@ class M14HttpTest {
     }
     @DynamicPropertySource static void properties(DynamicPropertyRegistry props) {
         M01IntegrationTest.properties(props);
-        props.add("openitsm.ai.internal-token", () -> TOKEN);
         props.add("openitsm.ai.service-url", () -> "http://127.0.0.1:" + PYTHON.getAddress().getPort());
         props.add("spring.mail.host", () -> "127.0.0.1");
         props.add("spring.mail.port", () -> 2525);
@@ -84,14 +85,14 @@ class M14HttpTest {
 
     @BeforeEach void setUp() throws Exception {
         clock.now = Instant.parse("2026-10-20T00:00:00Z");
-        db.execute("TRUNCATE team_settings,ai_connection_status,idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE team_settings,ai_connection_status,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         adminId = bootstrap.initialize("M14 Admin", "m14-admin@example.com", password);
         for (String role : List.of("EMPLOYEE", "ENGINEER")) {
             var user = new UserEntity(); user.id = UUID.randomUUID(); user.emailNormalized = role.toLowerCase() + "@example.com";
             user.name = role; user.role = role; user.status = "ACTIVE"; user.passwordHash = passwords.encode(password); user.updatedAt = clock.instant(); users.insert(user);
         }
         admin = signed("m14-admin@example.com"); employee = signed("employee@example.com"); engineer = signed("engineer@example.com");
-        CALLS.set(0); response = "{\"status\":\"SUCCESS\",\"outputMode\":\"JSON_SCHEMA\"}"; responseCode = 200; entered = null; release = null;
+        CALLS.set(0); response = "{\"status\":\"SUCCESS\"}"; responseCode = 200; entered = null; release = null;
     }
     HttpResponse<String> call(Browser browser, String method, String path, Object body, String key, String version) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(25));
@@ -99,8 +100,8 @@ class M14HttpTest {
             request.header("Origin", origin);
             if (browser.csrf != null) request.header("X-CSRF-Token", browser.csrf);
         }
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
         if (body != null) request.header("Content-Type", "application/json");
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client.send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -119,13 +120,13 @@ class M14HttpTest {
     void error(HttpResponse<String> value, int status, String code) throws Exception {
         assertThat(value.statusCode()).as(value.body()).isEqualTo(status);
         assertThat(json.readTree(value.body()).path("error").path("code").asText()).isEqualTo(code);
-        assertThat(value.body()).doesNotContain("bootstrap-model-test-secret", "bootstrap-smtp-test-secret", TOKEN);
+        assertThat(value.body()).doesNotContain("bootstrap-model-test-secret", "bootstrap-smtp-test-secret");
     }
 
     @Test void bootstrapReadIsRedactedAndHasNoSideEffects() throws Exception {
         var response = call(admin, "GET", "/api/v1/settings", null, null, null);
         assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.headers().firstValue("ETag").orElseThrow()).isEqualTo("\"0\"");
+
         assertThat(data(response).path("smtp").path("passwordConfigured").asBoolean()).isTrue();
         assertThat(data(response).path("lastTest").path("status").asText()).isEqualTo("NOT_TESTED");
         assertThat(data(response).path("lastCall").path("status").asText()).isEqualTo("NO_CALLS");
@@ -142,18 +143,15 @@ class M14HttpTest {
         error(call(new Browser(admin.client, null), "PATCH", "/api/v1/settings", Map.of("teamName", "Denied"), UUID.randomUUID().toString(), "\"0\""), 403, "CSRF_INVALID");
         assertThat(CALLS).hasValue(0);
     }
-    @Test void partialSavePreservesBootstrapEncryptsSecretsAndReplaysWithoutConnecting() throws Exception {
+    @Test void partialSavePreservesCredentialsWithoutConnecting() throws Exception {
         String key = UUID.randomUUID().toString(); var body = Map.of("teamName", "Service Team");
         var first = call(admin, "PATCH", "/api/v1/settings", body, key, "\"0\"");
         assertThat(first.statusCode()).as(first.body()).isEqualTo(200);
-        assertThat(data(first).path("acceptedVersion").asInt()).isEqualTo(1);
-        var replay = call(admin, "PATCH", "/api/v1/settings", body, key, "\"0\"");
-        assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-        error(call(admin, "PATCH", "/api/v1/settings", Map.of("teamName", "Different"), key, "\"0\""), 409, "IDEMPOTENCY_CONFLICT");
-        error(patch(body, 0), 409, "VERSION_CONFLICT");
+
+
         var row = db.queryForMap("SELECT * FROM team_settings");
-        assertThat(row.get("smtp_password").toString()).doesNotContain("bootstrap-smtp-test-secret");
-        assertThat(row.get("model_api_key").toString()).doesNotContain("bootstrap-model-test-secret");
+        assertThat(row.get("smtp_password").toString()).isEqualTo("bootstrap-smtp-test-secret");
+        assertThat(row.get("model_api_key").toString()).isEqualTo("bootstrap-model-test-secret");
         assertThat(runtime.current().smtp().password()).isEqualTo("bootstrap-smtp-test-secret");
         assertThat(runtime.current().model().model()).isEqualTo("bootstrap-model");
         assertThat(runtime.current().aiEnabled()).isFalse(); assertThat(CALLS).hasValue(0);
@@ -188,8 +186,8 @@ class M14HttpTest {
         error(call(admin, "POST", "/api/v1/settings/model-connection-tests", Map.of("prompt", "custom"), null, null), 400, "VALIDATION_FAILED");
         var successful = test();
         assertThat(successful.statusCode()).as(successful.body()).isEqualTo(200);
-        assertThat(data(successful).path("outputMode").asText()).isEqualTo("JSON_SCHEMA");
-        assertThat(data(call(admin, "GET", "/api/v1/settings", null, null, null)).path("lastTest").path("outputMode").asText()).isEqualTo("JSON_SCHEMA");
+        assertThat(data(successful).has("outputMode")).isFalse();
+        assertThat(data(call(admin, "GET", "/api/v1/settings", null, null, null)).path("lastTest").has("outputMode")).isFalse();
         assertThat(CALLS).hasValue(1);
         assertThat(runtime.current().aiEnabled()).isFalse();
         var limited = test(); error(limited, 429, "RATE_LIMITED"); assertThat(limited.headers().firstValue("Retry-After")).contains("1");
@@ -212,22 +210,22 @@ class M14HttpTest {
         clock.advance(1); response = "x".repeat(17000);
         error(test(), 503, "AI_INVALID_RESPONSE");
     }
-    @Test void concurrentSavesHaveOneWinnerAndNoDuplicateRows() throws Exception {
+    @Test void concurrentPartialSavesSerializeWithoutDuplicateRows() throws Exception {
         try (var pool = Executors.newFixedThreadPool(2)) {
             var start = new CountDownLatch(1);
             var first = pool.submit(() -> { start.await(); return patch(Map.of("teamName", "One"), 0); });
             var second = pool.submit(() -> { start.await(); return patch(Map.of("teamName", "Two"), 0); });
             start.countDown();
-            assertThat(List.of(first.get().statusCode(), second.get().statusCode())).containsExactlyInAnyOrder(200, 409);
+            assertThat(List.of(first.get().statusCode(), second.get().statusCode())).containsExactlyInAnyOrder(200, 200);
         }
         assertThat(db.queryForObject("SELECT count(*) FROM team_settings", Integer.class)).isEqualTo(1);
-        assertThat(runtime.current().version()).isEqualTo(1);
+        assertThat(runtime.current().version()).isEqualTo(2);
     }
     @Test void smtpDeliveryUsesSavedConnectionAndFromOnEachDeliveryWithoutChangingSwitches() throws Exception {
         var env = new org.springframework.mock.env.MockEnvironment(); env.setActiveProfiles("test");
         var deployment = new org.springframework.boot.autoconfigure.mail.MailProperties();
         deployment.setHost("old.invalid"); deployment.setPort(1);
-        var config = new com.openitsm.config.AccountMailConfig(true, "old@example.com", "http://localhost:5173", deployment, env);
+        var config = new com.openitsm.config.AccountMailConfig("old@example.com", "http://localhost:5173", deployment, env);
         var service = new com.openitsm.service.impl.SmtpMailServiceImpl(config.javaMailSender(), config, runtime);
         for (int version = 0; version < 2; version++) {
             try (var capture = new AccountMailSmtpTest.SmtpCapture()) {
@@ -274,7 +272,7 @@ class M14HttpTest {
         assertThatThrownBy(() -> runtime.recheckAiConnection(1)).hasMessageContaining("AI 已关闭");
     }
 
-    @Test void v15UpgradeLeavesExistingSuccessfulTestsUnverified() throws Exception {
+    @Test void upgradePreservesHistoricalModeWithoutConstrainingNewStatus() throws Exception {
         String schema = "m16_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         String jdbcUrl, username;
         try (var connection = db.getDataSource().getConnection()) {
@@ -289,20 +287,28 @@ class M14HttpTest {
         assertThat(db.queryForObject("SELECT status FROM " + schema + ".ai_connection_status", String.class)).isEqualTo("SUCCESS");
         assertThat(db.queryForObject("SELECT output_mode FROM " + schema + ".ai_connection_status", String.class)).isNull();
         assertThat(latest.migrate().migrationsExecuted).isZero();
+        db.execute("UPDATE " + schema + ".ai_connection_status SET output_mode='JSON_SCHEMA'");
+        assertThat(flyway.target("18").load().migrate().migrationsExecuted).isEqualTo(2);
+        db.execute("UPDATE " + schema + ".ai_connection_status SET status='RUNNING'");
+        assertThat(db.queryForObject("SELECT output_mode FROM " + schema + ".ai_connection_status", String.class)).isEqualTo("JSON_SCHEMA");
+        assertThat(db.queryForObject("SELECT config_version FROM " + schema + ".ai_connection_status", Long.class)).isEqualTo(7);
     }
 
-    @Test void latestAttemptOwnsModeAndUnsupportedIsPubliclyReported() throws Exception {
+    @Test void latestAttemptWinsAndProviderFailuresArePubliclyReported() throws Exception {
         assertThat(patch(Map.of("teamName", "Saved"), 0).statusCode()).isEqualTo(200);
-        response = "{\"code\":\"AI_STRUCTURED_OUTPUT_UNSUPPORTED\"}"; responseCode = 503;
-        error(test(), 503, "AI_STRUCTURED_OUTPUT_UNSUPPORTED");
+        for (String code : List.of("AI_PROVIDER_AUTH_FAILED", "AI_PROVIDER_RATE_LIMITED", "AI_PROVIDER_REQUEST_REJECTED")) {
+            response = json.writeValueAsString(Map.of("code", code)); responseCode = 503;
+            error(test(), 503, code);
+            clock.now = clock.now.plusSeconds(2);
+        }
         UUID first = UUID.randomUUID(), second = UUID.randomUUID();
         statuses.begin("TEST", 1, clock.instant(), first);
         statuses.begin("TEST", 2, clock.instant(), second);
-        statuses.finishTest(first, "SUCCESS", clock.instant(), "JSON_SCHEMA");
-        assertThat(statuses.find("TEST").outputMode()).isNull();
-        statuses.finishTest(second, "SUCCESS", clock.instant(), "TOOL_CALL");
+        statuses.finish("TEST", first, "SUCCESS", clock.instant());
+        assertThat(statuses.find("TEST").status()).isEqualTo("RUNNING");
+        statuses.finish("TEST", second, "SUCCESS", clock.instant());
         assertThat(statuses.find("TEST").configVersion()).isEqualTo(2);
-        assertThat(statuses.find("TEST").outputMode()).isEqualTo("TOOL_CALL");
+        assertThat(statuses.find("TEST").status()).isEqualTo("SUCCESS");
     }
 
     @AfterAll void packagedVerification() throws Exception {

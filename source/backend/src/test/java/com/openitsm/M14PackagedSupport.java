@@ -22,7 +22,7 @@ final class M14PackagedSupport {
             boolean fixed = request.path("messages").size() == 1 && request.path("messages").get(0).path("content").asText()
                 .startsWith("Reply with OK. This is an OpenITSM connection test.");
             calls.incrementAndGet();
-            String value = test.json.writeValueAsString(Map.of("businessTypeId", "00000000-0000-0000-0000-000000000009", "reason", "OK", "suggestedPriority", "P3"));
+            String value = "OK";
             byte[] bytes = test.json.writeValueAsString(Map.of("choices", List.of(Map.of("finish_reason", "stop", "message", Map.of("content", value))))).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(fixed ? 200 : 400, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
         });
@@ -30,22 +30,19 @@ final class M14PackagedSupport {
         int pythonPort = freePort(), appPort = freePort();
         var pythonDir = Path.of("../ai-service").toAbsolutePath().normalize();
         var python = new ProcessBuilder(pythonDir.resolve(".venv/Scripts/python.exe").toString(), "-m", "uvicorn", "app.main:app",
-            "--host", "127.0.0.1", "--port", String.valueOf(pythonPort), "--no-access-log").directory(pythonDir.toFile())
+            "--host", "127.0.0.1", "--port", String.valueOf(pythonPort), "--no-access-log", "--no-proxy-headers").directory(pythonDir.toFile())
             .redirectErrorStream(true).redirectOutput(Path.of("target/m14-python-app.log").toFile());
-        python.environment().put("OPENITSM_AI_INTERNAL_TOKEN", M14HttpTest.TOKEN);
         python.environment().put("OPENITSM_AI_ALLOW_LOCAL_MODEL", "true");
         var app = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin/java.exe").toString(), "-jar", "target/backend-0.1.0-SNAPSHOT.jar",
             "--spring.profiles.active=local", "--spring.config.import=", "--server.port=" + appPort, "--openitsm.origin=http://localhost:5189",
-            "--openitsm.account-mail.enabled=false", "--openitsm.ticket-mail.enabled=false", "--spring.mail.host=", "--spring.mail.username=", "--spring.mail.password=",
+            "--spring.mail.host=", "--spring.mail.username=", "--spring.mail.password=",
             "--openitsm.account-mail.from=", "--openitsm.model.api-key=", "--openitsm.model.base-url=", "--openitsm.model.name=",
             "--openitsm.ai.service-url=http://127.0.0.1:" + pythonPort, "--openitsm.cookie-name=openitsm-test-session",
-            "--openitsm.attachments.root=" + Path.of("target/m14-packaged-files").toAbsolutePath(),
-            "--openitsm.account-mail-key-file=" + M01IntegrationTest.KEY_FILE)
+            "--openitsm.attachments.root=" + Path.of("target/m14-packaged-files").toAbsolutePath())
             .redirectErrorStream(true).redirectOutput(Path.of("target/m14-packaged-app.log").toFile());
         app.environment().put("OPENITSM_DB_URL", M01IntegrationTest.PG.getJdbcUrl());
         app.environment().put("OPENITSM_DB_USER", M01IntegrationTest.PG.getUsername());
         app.environment().put("OPENITSM_DB_PASSWORD", M01IntegrationTest.PG.getPassword());
-        app.environment().put("OPENITSM_AI_INTERNAL_TOKEN", M14HttpTest.TOKEN);
         Process pythonProcess = null, appProcess = null;
         int oldPort = test.port;
         String oldOrigin = test.origin;
@@ -56,7 +53,7 @@ final class M14PackagedSupport {
             for (int i = 0; i < 90; i++) {
                 if (!pythonProcess.isAlive() || !appProcess.isAlive()) throw new IllegalStateException("Fixture exited; inspect m14 packaged logs");
                 try {
-                    var result = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + appPort + "/health/ready")).timeout(Duration.ofSeconds(2)).build(), HttpResponse.BodyHandlers.ofString());
+                    var result = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + appPort + "/api/v1/auth/csrf")).timeout(Duration.ofSeconds(2)).build(), HttpResponse.BodyHandlers.ofString());
                     if (result.statusCode() == 200) { ready = true; break; }
                 } catch (Exception ignored) {}
                 Thread.sleep(500);

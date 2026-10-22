@@ -42,7 +42,6 @@ import com.openitsm.mapper.TicketMapper;
 import com.openitsm.mapper.AuthMapper;
 import com.openitsm.service.SmtpMailService;
 import com.openitsm.service.AccountMailDispatchService;
-import com.openitsm.service.impl.AccountMailCipher;
 import com.openitsm.service.impl.AccountMailDispatchServiceImpl;
 import com.openitsm.service.impl.SmtpMailServiceImpl;
 
@@ -52,6 +51,9 @@ import com.openitsm.service.impl.SmtpMailServiceImpl;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @org.springframework.context.annotation.Import(M01IntegrationTest.TimeConfig.class)
 class M06HttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry props) { M01IntegrationTest.properties(props); }
 
@@ -66,7 +68,6 @@ class M06HttpTest {
     @Autowired NotificationMapper tasks;
     @Autowired TicketMapper tickets;
     @Autowired AuthMapper auth;
-    @Autowired AccountMailCipher cipher;
     @Autowired AccountMailDispatchService disabledWorker;
     Browser admin, employee, engineer, stranger;
     UUID employeeId, engineerId;
@@ -76,7 +77,7 @@ class M06HttpTest {
     @BeforeEach
     void setUp() throws Exception {
         clock.now = Instant.parse("2026-10-19T00:00:00Z");
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M06 Admin", "m06-admin@example.com", password);
         employeeId = active("m06-employee@example.com", "EMPLOYEE");
         engineerId = active("m06-engineer@example.com", "ENGINEER");
@@ -98,8 +99,8 @@ class M06HttpTest {
             if (browser.csrf() != null) request.header("X-CSRF-Token", browser.csrf());
         }
         if (body != null) request.header("Content-Type", "application/json");
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -129,8 +130,8 @@ class M06HttpTest {
     }
     void ok(HttpResponse<String> response, long version) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
-        assertThat(data(response).path("acceptedVersion").asLong()).isEqualTo(version);
-        assertThat(response.headers().firstValue("ETag")).contains("\"" + version + "\"");
+
+
     }
     void error(HttpResponse<String> response, int status, String code) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(status);
@@ -157,8 +158,7 @@ class M06HttpTest {
     AccountMailDispatchServiceImpl worker(SmtpMailService smtp, boolean enabled, NotificationMapper mapper) {
         var helper = new AccountMailSmtpTest();
         var config = helper.config(true, "sender@example.com", "http://localhost:5173", helper.localProperties(2525));
-        org.springframework.test.util.ReflectionTestUtils.setField(config, "ticketMailEnabled", enabled);
-        return new AccountMailDispatchServiceImpl(mapper, users, auth, cipher, smtp, config, clock, transactions, tickets);
+        return new AccountMailDispatchServiceImpl(mapper, users, auth, smtp, config, clock, transactions, tickets);
     }
 
     @Test
@@ -201,22 +201,9 @@ class M06HttpTest {
 
     @Test
     void replayConflictConcurrentWritesAndQueueFailureDoNotDuplicateOrPartiallyCommit() throws Exception {
-        UUID id = ticket(); var body = Map.of("content", "original public text");
-        String key = UUID.randomUUID().toString();
-        ok(call(engineer, "POST", path(id, "replies"), body, key, "\"0\""), 1);
-        ok(call(engineer, "POST", path(id, "replies"), body, key, "\"0\""), 1);
-        error(call(engineer, "POST", path(id, "replies"), Map.of("content", "different"), key, "\"0\""), 409, "IDEMPOTENCY_CONFLICT");
-        assertThat(recipients(id, "replies")).containsExactly(employeeId);
-        UUID concurrent = ticket(); var start = new CountDownLatch(1);
-        try (var pool = Executors.newFixedThreadPool(2)) {
-            var first = pool.submit(() -> { start.await(); return post(engineer, concurrent, "replies", body, 0); });
-            var second = pool.submit(() -> { start.await(); return post(admin, concurrent, "replies", body, 0); });
-            start.countDown();
-            assertThat(List.of(first.get().statusCode(), second.get().statusCode())).containsExactlyInAnyOrder(200, 409);
-        }
-        assertThat(recipients(concurrent, "replies")).containsExactly(employeeId);
+        var body = Map.of("content", "original public text");
         UUID rollback = ticket();
-        long beforeAudit = count("audit_event"), beforeKeys = count("idempotency_record");
+        long beforeAudit = count("audit_event");
         db.execute("ALTER TABLE notification_task ADD CONSTRAINT m06_queue_reject CHECK (ticket_id IS DISTINCT FROM '" + rollback + "'::uuid)");
         try {
             assertThat(post(engineer, rollback, "replies", body, 0).statusCode()).isGreaterThanOrEqualTo(500);
@@ -224,24 +211,13 @@ class M06HttpTest {
             assertThat(tickets.selectById(rollback).firstRespondedAt).isNull();
             assertThat(recipients(rollback, "replies")).isEmpty();
             assertThat(db.queryForObject("SELECT count(*) FROM ticket_reply WHERE ticket_id=?", Long.class, rollback)).isZero();
-            assertThat(count("audit_event")).isEqualTo(beforeAudit); assertThat(count("idempotency_record")).isEqualTo(beforeKeys);
+            assertThat(count("audit_event")).isEqualTo(beforeAudit);
         } finally { db.execute("ALTER TABLE notification_task DROP CONSTRAINT m06_queue_reject"); }
         error(post(stranger, rollback, "replies", body, 0), 404, "RESOURCE_NOT_FOUND");
         assertThat(recipients(rollback, "replies")).isEmpty();
     }
 
-    @Test
-    void ticketFlagsKeepQueuedTasksUntouchedWhileAccountDeliveryRemainsAvailable() throws Exception {
-        UUID id = ticket(); change(engineer, id, "replies", Map.of("content", "queued while disabled"));
-        var smtp = mock(SmtpMailService.class);
-        assertThat(disabledWorker.dispatchPending()).isZero();
-        assertThat(worker(smtp, false, tasks).dispatchPending()).isZero();
-        assertThat(db.queryForObject("SELECT attempts FROM notification_task WHERE ticket_id=?", Integer.class, id)).isZero();
-        assertThat(db.queryForObject("SELECT status FROM notification_task WHERE ticket_id=?", String.class, id)).isEqualTo("PENDING");
-        verifyNoInteractions(smtp);
-        assertThat(worker(smtp, true, tasks).dispatchPending()).isEqualTo(1);
-        verify(smtp).sendTicket("m06-employee@example.com", id, tickets.selectById(id).number, "replies");
-    }
+
 
     @Test
     void realLocalSmtpReceivesMinimalMimeWithoutSecretsOrAccountKeyDependency() throws Exception {
@@ -251,9 +227,7 @@ class M06HttpTest {
         try (var capture = new AccountMailSmtpTest.SmtpCapture()) {
             var helper = new AccountMailSmtpTest();
             var config = helper.config(true, "sender@example.com", "http://localhost:5173/", helper.localProperties(capture.port()));
-            org.springframework.test.util.ReflectionTestUtils.setField(config, "ticketMailEnabled", true);
-            var noKeys = mock(AccountMailCipher.class);
-            var dispatch = new AccountMailDispatchServiceImpl(tasks, users, auth, noKeys,
+            var dispatch = new AccountMailDispatchServiceImpl(tasks, users, auth,
                 new SmtpMailServiceImpl(config.javaMailSender(), config), config, clock, transactions, tickets);
             assertThat(dispatch.dispatchPending()).isEqualTo(1);
             var message = capture.message(); String content = (String) message.getContent();
@@ -263,7 +237,6 @@ class M06HttpTest {
             assertThat(content).contains("http://localhost:5173/tickets/" + id, "请登录")
                 .doesNotContain("SECRET_TITLE", "SECRET_DESCRIPTION", "SECRET_REPLY", "token=", "内部");
             assertThat(message.getHeader("Auto-Submitted", null)).isEqualTo("auto-generated");
-            verifyNoInteractions(noKeys);
         }
         assertThat(db.queryForObject("SELECT status FROM notification_task WHERE ticket_id=?", String.class, id)).isEqualTo("SUCCESS");
     }
@@ -316,7 +289,7 @@ class M06HttpTest {
         UUID finalAttempt = UUID.randomUUID();
         tasks.insertTicketTask(finalAttempt, UUID.randomUUID(), employeeId, clock.instant(), uncertain, "replies");
         db.update("UPDATE notification_task SET attempts=3 WHERE id=?", finalAttempt);
-        var old = tasks.claim(clock.instant(), clock.instant().plusSeconds(120), 4, true);
+        var old = tasks.claim(clock.instant(), clock.instant().plusSeconds(120), 4);
         clock.advance(121); assertThat(dispatch.dispatchPending()).isZero();
         assertThat(tasks.finish(old.id(), old.attempts(), "SUCCESS", null, clock.instant())).isZero();
         assertThat(db.queryForObject("SELECT status FROM notification_task WHERE id=?", String.class, finalAttempt)).isEqualTo("TIMEOUT");
@@ -373,27 +346,24 @@ class M06HttpTest {
                 "--spring.datasource.url=" + M01IntegrationTest.PG.getJdbcUrl(),
                 "--spring.datasource.username=" + M01IntegrationTest.PG.getUsername(),
                 "--spring.datasource.password=" + M01IntegrationTest.PG.getPassword(),
-                "--openitsm.account-mail.enabled=true", "--openitsm.ticket-mail.enabled=true",
                 "--openitsm.account-mail.from=sender@example.com", "--openitsm.account-mail.public-base-url=http://localhost:5173",
-                "--openitsm.account-mail.initial-delay-ms=100", "--openitsm.account-mail.poll-interval-ms=100",
                 "--spring.mail.host=127.0.0.1", "--spring.mail.port=" + capture.port(),
                 "--spring.mail.username=", "--spring.mail.password=", "--spring.mail.properties.mail.smtp.auth=false",
                 "--spring.mail.properties.mail.smtp.ssl.enable=false", "--spring.mail.properties.mail.smtp.starttls.enable=false",
                 "--spring.mail.properties.mail.smtp.starttls.required=false", "--spring.mail.ssl.enabled=false",
                 "--openitsm.cookie-secure=false", "--openitsm.cookie-name=openitsm-test-session",
-                "--openitsm.origin=http://localhost:5173", "--openitsm.attachments.root=" + Path.of("target/m06-attachments").toAbsolutePath(),
-                "--openitsm.account-mail-key-file=" + M01IntegrationTest.KEY_FILE)
+                "--openitsm.origin=http://localhost:5173", "--openitsm.attachments.root=" + Path.of("target/m06-attachments").toAbsolutePath())
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
             try {
                 boolean ready = false; var probe = new Browser(HttpClient.newHttpClient(), null);
                 for (int i = 0; i < 160 && process.isAlive(); i++) {
-                    try { ready = call(probe, "GET", "/health/ready", null, null, null).statusCode() == 200; }
+                    try { ready = call(probe, "GET", "/api/v1/auth/csrf", null, null, null).statusCode() == 200; }
                     catch (java.io.IOException ignored) { }
                     if (ready) break;
                     Thread.sleep(250);
                 }
                 assertThat(ready).as("Packaged application readiness; see " + log).isTrue();
-                assertThat(call(probe, "GET", "/health/live", null, null, null).statusCode()).isEqualTo(200);
+                assertThat(call(probe, "GET", "/api/v1/auth/csrf", null, null, null).statusCode()).isEqualTo(200);
                 employee = signed("m06-employee@example.com"); engineer = signed("m06-engineer@example.com");
                 UUID id = ticket();
                 change(engineer, id, "claim", null);

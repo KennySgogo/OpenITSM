@@ -19,7 +19,7 @@ try {
     $env:OPENITSM_DB_PASSWORD = $env:OPENITSM_TEST_DB_PASSWORD
     $jar = Join-Path $backendRoot 'target/backend-0.1.0-SNAPSHOT.jar'
     $java = (Get-Command java).Source
-    $appProcess = Start-Process -FilePath $java -ArgumentList @('-jar', $jar, '--spring.profiles.active=local', "--server.port=$Port") -WindowStyle Hidden -PassThru -WorkingDirectory $backendRoot -RedirectStandardOutput (Join-Path $backendRoot 'target/smoke-stdout.log') -RedirectStandardError (Join-Path $backendRoot 'target/smoke-stderr.log')
+    $appProcess = Start-Process -FilePath $java -ArgumentList @('-jar', $jar, '--spring.profiles.active=local', '--spring.config.import=', "--server.port=$Port") -WindowStyle Hidden -PassThru -WorkingDirectory $backendRoot -RedirectStandardOutput (Join-Path $backendRoot 'target/smoke-stdout.log') -RedirectStandardError (Join-Path $backendRoot 'target/smoke-stderr.log')
     $handler = [System.Net.Http.HttpClientHandler]::new()
     $handler.CookieContainer = [System.Net.CookieContainer]::new()
     $client = [System.Net.Http.HttpClient]::new($handler)
@@ -30,7 +30,7 @@ try {
     while ([DateTime]::UtcNow -lt $deadline) {
         if ($appProcess.HasExited) { throw 'Jar exited before readiness; inspect smoke logs' }
         try {
-            $reply = $client.GetAsync('/health/ready').GetAwaiter().GetResult()
+            $reply = $client.GetAsync('/api/v1/auth/csrf').GetAwaiter().GetResult()
             $ready = [int]$reply.StatusCode -eq 200
             $reply.Dispose()
             if ($ready) { break }
@@ -38,18 +38,14 @@ try {
         Start-Sleep -Milliseconds 250
     }
     if (!$ready) { throw 'Jar readiness deadline exceeded' }
-    $live = $client.GetStringAsync('/health/live').GetAwaiter().GetResult() | ConvertFrom-Json
-    if ($live.status -ne 'UP') { throw 'Incorrect liveness response' }
+    $anonymous = $client.GetStringAsync('/api/v1/auth/csrf').GetAwaiter().GetResult() | ConvertFrom-Json
+    if (!$anonymous.data.csrfToken) { throw 'Missing anonymous CSRF token' }
     $me = $client.GetAsync('/api/v1/auth/me').GetAwaiter().GetResult()
     $meBody = $me.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
     if ([int]$me.StatusCode -ne 401 -or $meBody.error.code -ne 'SESSION_EXPIRED') { throw 'Unauthenticated contract failed' }
     $me.Dispose()
     $docs = $client.GetStringAsync('/v3/api-docs').GetAwaiter().GetResult() | ConvertFrom-Json
     if (!$docs.paths.'/api/v1/auth/login' -or !$docs.paths.'/api/v1/users/{id}/disable') { throw 'Missing actual M01 OpenAPI paths' }
-    foreach ($schemaName in @('Login','Email','Password','Invite','Patch','Disable')) {
-        if (!$docs.components.schemas.$schemaName) { throw "OpenAPI schema name changed: $schemaName" }
-    }
-    if ($docs.paths.'/api/v1/tickets') { throw 'Unexpected placeholder ticket API' }
     $csrf = $client.GetStringAsync('/api/v1/auth/csrf').GetAwaiter().GetResult() | ConvertFrom-Json
     $message = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, '/api/v1/auth/login')
     $message.Headers.Add('Origin', 'http://localhost:5173')
@@ -85,7 +81,7 @@ try {
     $afterLogout = $client.GetAsync('/api/v1/auth/me').GetAwaiter().GetResult()
     if ([int]$afterLogout.StatusCode -ne 401) { throw 'Session remained usable after logout' }
     $afterLogout.Dispose()
-    Write-Output 'PASS: jar startup, readiness, liveness, anonymous 401, OpenAPI/schema names, no placeholder ticket API, chunked 413, login, member query, logout/revocation'
+    Write-Output 'PASS: jar startup, anonymous CSRF/401, OpenAPI routes, chunked 413, login, member query, logout/revocation'
 } finally {
     if ($client) { $client.Dispose() }
     if ($handler) { $handler.Dispose() }

@@ -17,16 +17,14 @@ public class ProfileController {
     @GetMapping
     public ResponseEntity<?> detail(HttpServletRequest request) {
         var result = service.detail(RequestAuthentication.from(request));
-        return ResponseEntity.ok().eTag("\"" + result.version() + "\"").body(ApiResponse.of(request, result));
+        return ResponseEntity.ok().body(ApiResponse.of(request, result));
     }
 
     @PatchMapping
-    public ResponseEntity<?> update(@RequestBody UpdateProfileRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        var result = service.update(RequestAuthentication.from(request), body, version, key);
-        var response = ResponseEntity.ok().eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+    public ResponseEntity<?> update(@RequestBody UpdateProfileRequest body, HttpServletRequest request) {
+        var result = service.update(RequestAuthentication.from(request), body);
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, result));
     }
 }

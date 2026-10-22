@@ -2,7 +2,6 @@ package com.openitsm.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.dto.SaveTicketTypeRequest;
 import com.openitsm.entity.TicketTypeEntity;
 import com.openitsm.mapper.TicketTypeMapper;
@@ -21,10 +20,9 @@ public class TicketTypeServiceImpl implements TicketTypeService {
     private final TicketTypeMapper types;
     private final UserMapper users;
     private final TransactionLockMapper locks;
-    private final IdempotencyService idem;
     private final SessionService sessions;
-    public TicketTypeServiceImpl(TicketTypeMapper types, UserMapper users, TransactionLockMapper locks, IdempotencyService idem, SessionService sessions) {
-        this.types = types; this.users = users; this.locks = locks; this.idem = idem; this.sessions = sessions;
+    public TicketTypeServiceImpl(TicketTypeMapper types, UserMapper users, TransactionLockMapper locks, SessionService sessions) {
+        this.types = types; this.users = users; this.locks = locks; this.sessions = sessions;
     }
     @Transactional(readOnly = true)
     public List<TicketTypeVO> list(AuthContext context, String view) {
@@ -43,40 +41,29 @@ public class TicketTypeServiceImpl implements TicketTypeService {
         if ("EMPLOYEE".equals(actor.role)) throw forbidden();
     }
     @Transactional
-    public com.openitsm.vo.CreatedTicketTypeVO create(AuthContext context, SaveTicketTypeRequest body, String key) {
+    public com.openitsm.vo.CreatedTicketTypeVO create(AuthContext context, SaveTicketTypeRequest body) {
         String name = requiredName(body);
         String description = description(body);
-        var requestKey = idem.key(key); var actorId = context.user().id;
-        String operation = "POST /api/v1/ticket-types", hash = idem.hash(body, null);
-        idem.reserve(actorId, operation, requestKey); actor(context);
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) {
-            return new com.openitsm.vo.CreatedTicketTypeVO(previous.resourceId(), name, previous.acceptedVersion(), true);
-        }
+        UUID actorId = context.user().id;
+        actor(context);
         var type = new TicketTypeEntity(); type.id = UUID.randomUUID(); type.name = name; type.creatorId = actorId;
         type.description = description;
         types.insert(type); sessions.touch(context.session().hash());
-        idem.save(actorId, operation, requestKey, hash, type.id, type.version, 201);
-        return new com.openitsm.vo.CreatedTicketTypeVO(type.id, type.name, type.version, false);
+        return new com.openitsm.vo.CreatedTicketTypeVO(type.id, type.name);
     }
     @Transactional
-    public ActionVO change(AuthContext context, UUID id, SaveTicketTypeRequest body, String version, String key) {
-        long expected = Values.version(version);
+    public ActionVO change(AuthContext context, UUID id, SaveTicketTypeRequest body) {
         String name = body == null ? null : requiredName(body);
         String description = description(body);
-        String operation = (body == null ? "DELETE " : "PATCH ") + "/api/v1/ticket-types/" + id;
-        var requestKey = idem.key(key); var actorId = context.user().id; String hash = idem.hash(body, version);
-        idem.reserve(actorId, operation, requestKey); actor(context);
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
+        UUID actorId = context.user().id;
+        actor(context);
         var type = types.lock(id);
         if (type == null || !type.active) throw new BusinessException(404, "RESOURCE_NOT_FOUND", "类型不存在或已移除");
         if (!"ADMIN".equals(context.user().role) && !actorId.equals(type.creatorId)) throw forbidden();
-        if (type.version != expected) throw new BusinessException(409, "VERSION_CONFLICT", "类型已更新，请刷新后重新确认");
         if (body == null) type.active = false; else type.name = name;
         if (body != null && body.description() != null) type.description = description;
         type.version++; types.updateById(type); sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, id, type.version, 200);
+        return new ActionVO(id);
     }
     private String requiredName(SaveTicketTypeRequest body) {
         if (body == null || body.name() == null || body.name().isBlank()) throw BusinessException.field("name", "请填写类型名称");

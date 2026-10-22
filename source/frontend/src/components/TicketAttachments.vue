@@ -20,11 +20,10 @@ const input = ref<HTMLInputElement>();
 const internal = ref(false);
 const staff = computed(() => ['ENGINEER', 'ADMIN'].includes(sessionState.session?.user.role ?? ''));
 const permitted = computed(() => !!sessionState.session && canReply(props.ticket, sessionState.session.user, internal.value));
-const pending = ref<{ body: FormData; version: number; key: string }>();
 let sequence = 0;
 let alive = true;
 let followLatest = false;
-watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
+watch(() => busy.value, value => emit('lock', value), { immediate: true });
 onUnmounted(() => { alive = false; sequence++; emit('lock', false); });
 
 async function load(nextPage = page.value, latest = false) {
@@ -52,24 +51,20 @@ function choose(event: Event) {
   error.value = undefined;
 }
 async function upload() {
-  if (blocked.value || props.refreshing || props.externalBlocked || (!pending.value && !permitted.value)) return;
-  if (!pending.value && (!selected.value || selected.value.size < 1 || selected.value.size > 10 * 1024 * 1024)) {
+  if (blocked.value || props.refreshing || props.externalBlocked || !permitted.value) return;
+  if (!selected.value || selected.value.size < 1 || selected.value.size > 10 * 1024 * 1024) {
     showError(new ApiError(400, { code: 'VALIDATION_FAILED', message: '请选择非空且不超过 10 MiB 的文件' }));
     return;
   }
   busy.value = true;
   try {
-    if (!pending.value) {
-      const body = new FormData();
-      body.append('file', selected.value!);
-      body.append('visibility', internal.value ? 'INTERNAL' : 'PUBLIC');
-      pending.value = { body, version: props.ticket.version, key: crypto.randomUUID() };
-    }
+    const body = new FormData();
+    body.append('file', selected.value);
+    body.append('visibility', internal.value ? 'INTERNAL' : 'PUBLIC');
     error.value = undefined;
-    const result = await request<TicketAction>(`/tickets/${props.ticket.id}/attachments`, { method: 'POST', ...pending.value });
+    await request<TicketAction>(`/tickets/${props.ticket.id}/attachments`, { method: 'POST', body });
     if (!alive) return;
-    ElMessage.success(result.replayed ? '此附件此前已上传，正在刷新工单' : '附件上传成功');
-    pending.value = undefined;
+    ElMessage.success('附件上传成功');
     selected.value = undefined;
     if (input.value) input.value.value = '';
     followLatest = true;
@@ -78,9 +73,8 @@ async function upload() {
     if (!alive) return;
     showError(value);
     const failure = error.value!;
-    if (failure.status >= 400 && failure.status < 500 && !['REQUEST_IN_PROGRESS', 'RATE_LIMITED'].includes(failure.code)) {
-      pending.value = undefined;
-      if (['VERSION_CONFLICT', 'INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN', 'IDEMPOTENCY_CONFLICT'].includes(failure.code)) emit('refresh');
+    if (failure.status >= 400 && failure.status < 500 && !['RATE_LIMITED'].includes(failure.code)) {
+      if (['INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN'].includes(failure.code)) emit('refresh');
     }
   } finally { if (alive) busy.value = false; }
 }
@@ -117,16 +111,16 @@ function sizeLabel(size: number) { return size < 1024 ? `${size} B` : size < 102
     <ElPagination v-if="attachments && attachments.total > attachments.pageSize" :current-page="page" :page-size="attachments.pageSize" :total="attachments.total" :disabled="listBusy" layout="total, prev, pager, next" @current-change="load($event)" />
     <div class="upload-area">
       <ErrorNotice :error="error" />
-      <ElAlert v-if="pending && error" title="上传结果尚未确认，请重试原请求；文件、可见性和版本已保留，避免重复上传。" type="info" :closable="false" />
-      <template v-if="!['CLOSED', 'REJECTED'].includes(ticket.status) || pending">
-        <fieldset :disabled="busy || !!pending || refreshing || externalBlocked">
+
+      <template v-if="!['CLOSED', 'REJECTED'].includes(ticket.status)">
+        <fieldset :disabled="busy || refreshing || externalBlocked">
           <legend>上传附件</legend>
           <p class="hint">一次一个文件，最大 10 MiB。附件仅供下载，不提供在线预览。</p>
           <label class="file-picker">选择文件 <input ref="input" type="file" aria-label="选择附件文件" @change="choose" /></label>
-          <ElRadioGroup v-if="staff" v-model="internal" aria-label="附件可见性" :disabled="busy || !!pending || refreshing || externalBlocked"><ElRadioButton :value="false">公开附件</ElRadioButton><ElRadioButton :value="true">内部附件</ElRadioButton></ElRadioGroup>
+          <ElRadioGroup v-if="staff" v-model="internal" aria-label="附件可见性" :disabled="busy || refreshing || externalBlocked"><ElRadioButton :value="false">公开附件</ElRadioButton><ElRadioButton :value="true">内部附件</ElRadioButton></ElRadioGroup>
           <p class="hint">{{ internal ? '仅工程师和管理员可见，提单员工不可见。' : '工单可见者均可下载，包含提单人。' }}</p>
         </fieldset>
-        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (!pending && !permitted)" @click="upload">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原上传' : '上传附件' }}</ElButton></div>
+        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || !permitted" @click="upload">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '上传附件' }}</ElButton></div>
       </template>
       <p v-else class="hint">工单已结束，不能上传附件，已有附件仍可下载。<RouterLink to="/tickets/new">新建工单</RouterLink></p>
     </div>

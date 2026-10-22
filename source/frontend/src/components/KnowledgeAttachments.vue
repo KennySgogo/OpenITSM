@@ -19,11 +19,10 @@ const page = ref(1);
 const selected = ref<File>();
 const input = ref<HTMLInputElement>();
 const permitted = computed(() => sessionState.session?.user.role === 'ENGINEER' && props.article.authorId === sessionState.session.user.id && props.article.status === 'DRAFT');
-const pending = ref<{ body?: FormData; version: number; key: string; path: string; method: string }>();
 let sequence = 0;
 let alive = true;
 let followLatest = false;
-watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
+watch(() => busy.value, value => emit('lock', value), { immediate: true });
 onUnmounted(() => { alive = false; sequence++; emit('lock', false); });
 
 async function load(nextPage = page.value, latest = false) {
@@ -51,43 +50,41 @@ function choose(event: Event) {
   error.value = undefined;
 }
 async function upload() {
-  if (blocked.value || props.refreshing || props.externalBlocked || (!pending.value && !permitted.value)) return;
-  if (!pending.value && (!selected.value || selected.value.size < 1 || selected.value.size > 100 * 1024 * 1024)) {
+  if (blocked.value || props.refreshing || props.externalBlocked || !permitted.value) return;
+  if (!selected.value || selected.value.size < 1 || selected.value.size > 100 * 1024 * 1024) {
     showError(new ApiError(400, { code: 'VALIDATION_FAILED', message: '请选择非空且不超过 100 MiB 的文件' }));
     return;
   }
+  const body = new FormData();
+  body.append('file', selected.value);
+  await submit(`/knowledge-articles/${props.article.id}/attachments`, 'POST', body);
+}
+async function remove(item: KnowledgeAttachment) {
+  if (blocked.value || props.refreshing || props.externalBlocked || !permitted.value) return;
+  await submit(`/knowledge-articles/${props.article.id}/attachments/${item.id}`, 'DELETE');
+}
+async function submit(path: string, method: 'POST' | 'DELETE', body?: FormData) {
   busy.value = true;
   try {
-    if (!pending.value) {
-      const body = new FormData();
-      body.append('file', selected.value!);
-      pending.value = { body, version: props.article.version, key: crypto.randomUUID(), path: `/knowledge-articles/${props.article.id}/attachments`, method: 'POST' };
-    }
     error.value = undefined;
-    const result = await request<MemberAction>(pending.value.path, pending.value);
+    await request<MemberAction>(path, { method, body });
     if (!alive) return;
-    ElMessage.success(result.replayed ? '此操作此前已完成，正在刷新知识' : pending.value.method === 'DELETE' ? '附件已移除' : '附件上传成功');
-    pending.value = undefined;
-    selected.value = undefined;
-    if (input.value) input.value.value = '';
+    ElMessage.success(method === 'DELETE' ? '附件已移除' : '附件上传成功');
+    if (method === 'POST') {
+      selected.value = undefined;
+      if (input.value) input.value.value = '';
+    }
     followLatest = true;
     emit('refresh');
   } catch (value) {
     if (!alive) return;
     showError(value);
     const failure = error.value!;
-    if (failure.status >= 400 && failure.status < 500 && !['REQUEST_IN_PROGRESS', 'RATE_LIMITED'].includes(failure.code)) {
-      pending.value = undefined;
-      if (['VERSION_CONFLICT', 'INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN', 'IDEMPOTENCY_CONFLICT'].includes(failure.code)) emit('refresh');
+    if (failure.status >= 400 && failure.status < 500 && !['RATE_LIMITED'].includes(failure.code)) {
+      if (['INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN'].includes(failure.code)) emit('refresh');
     }
   } finally { if (alive) busy.value = false; }
 }
-async function remove(item: KnowledgeAttachment) {
-  if (blocked.value || refreshingBlocked() || !permitted.value || pending.value) return;
-  pending.value = { path: `/knowledge-articles/${props.article.id}/attachments/${item.id}`, method: 'DELETE', version: props.article.version, key: crypto.randomUUID() };
-  await upload();
-}
-function refreshingBlocked() { return props.refreshing || props.externalBlocked; }
 async function download(item: KnowledgeAttachment) {
   if (downloadBusy.value) return;
   downloadBusy.value = true;
@@ -115,20 +112,20 @@ function sizeLabel(size: number) { return size < 1024 ? `${size} B` : size < 102
       <p v-if="attachments && !attachments.total" class="hint">暂无附件。</p>
       <article v-for="item in attachments?.items" :key="item.id" class="attachment-item">
         <div class="file-info"><strong>{{ item.fileName }}</strong><span>{{ sizeLabel(item.size) }}</span><small>{{ item.uploaderName }} · {{ new Date(item.createdAt).toLocaleString('zh-CN') }}</small></div>
-        <ElButton :disabled="downloadBusy" @click="download(item)">下载</ElButton><ElPopconfirm v-if="permitted" title="从草稿中移除此附件？" @confirm="remove(item)"><template #reference><ElButton :disabled="blocked || refreshing || externalBlocked || !!pending">移除</ElButton></template></ElPopconfirm>
+        <ElButton :disabled="downloadBusy" @click="download(item)">下载</ElButton><ElPopconfirm v-if="permitted" title="从草稿中移除此附件？" @confirm="remove(item)"><template #reference><ElButton :disabled="blocked || refreshing || externalBlocked">移除</ElButton></template></ElPopconfirm>
       </article>
     </div>
     <ElPagination v-if="attachments && attachments.total > attachments.pageSize" :current-page="page" :page-size="attachments.pageSize" :total="attachments.total" :disabled="listBusy" layout="total, prev, pager, next" @current-change="load($event)" />
     <div class="upload-area">
       <ErrorNotice :error="error" />
-      <ElAlert v-if="pending && error" title="附件操作结果尚未确认，请重试原请求；文件和版本已保留，避免重复上传。" type="info" :closable="false" />
-      <template v-if="permitted || pending">
-        <fieldset :disabled="busy || !!pending || refreshing || externalBlocked">
+
+      <template v-if="permitted">
+        <fieldset :disabled="busy || refreshing || externalBlocked">
           <legend>上传附件</legend>
           <p class="hint">一次一个文件，最大 100 MiB。附件仅供下载，不提供在线预览。</p>
           <label class="file-picker">选择文件 <input ref="input" type="file" aria-label="选择附件文件" @change="choose" /></label>
         </fieldset>
-        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (!pending && !permitted)" @click="upload">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原操作' : '上传附件' }}</ElButton></div>
+        <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || !permitted" @click="upload">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '上传附件' }}</ElButton></div>
       </template>
       <p v-else class="hint">知识已结束，不能上传附件，已有附件仍可下载。<RouterLink to="/knowledge-articles/new">新建知识</RouterLink></p>
     </div>

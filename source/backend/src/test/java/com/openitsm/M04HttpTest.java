@@ -34,7 +34,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import static org.assertj.core.api.Assertions.*;
 
 /** TCP HTTP against the actual Spring application and isolated PostgreSQL. */
@@ -42,6 +41,9 @@ import static org.assertj.core.api.Assertions.*;
 @ActiveProfiles("local")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class M04HttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry props) { M01IntegrationTest.properties(props); }
 
@@ -59,7 +61,7 @@ class M04HttpTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M04 Admin", "m04-admin@example.com", password);
         employeeId = active("m04-employee@example.com", "EMPLOYEE");
         engineerId = active("m04-engineer@example.com", "ENGINEER");
@@ -81,8 +83,8 @@ class M04HttpTest {
             if (browser.csrf() != null) request.header("X-CSRF-Token", browser.csrf());
         }
         if (body != null) request.header("Content-Type", "application/json");
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -112,8 +114,8 @@ class M04HttpTest {
     }
     void ok(HttpResponse<String> response, long version) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
-        assertThat(data(response).path("acceptedVersion").asLong()).isEqualTo(version);
-        assertThat(response.headers().firstValue("ETag")).contains("\"" + version + "\"");
+
+
     }
     void error(HttpResponse<String> response, int status, String code) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(status);
@@ -170,33 +172,10 @@ class M04HttpTest {
         error(post(engineer, id, "internal-notes", Map.of("content", "closed"), 0), 409, "INVALID_STATE");
         assertThat(page(employee, id, "replies").path("total").asInt()).isZero();
         assertThat(count("ticket_reply")).isZero(); assertThat(count("audit_event")).isZero();
-        assertThat(count("idempotency_record")).isEqualTo(1); assertThat(version(id)).isZero();
+        assertThat(version(id)).isZero();
     }
 
-    @Test
-    void versionAndIdempotencyPreserveOriginalResultAndScope() throws Exception {
-        UUID id = ticket(); String key = UUID.randomUUID().toString();
-        var body = Map.of("content", "original");
-        ok(call(employee, "POST", path(id, "replies"), body, key, "\"0\""), 1);
-        ok(post(engineer, id, "replies", Map.of("content", "later"), 1), 2);
-        db.update("UPDATE ticket SET status='CLOSED' WHERE id=?", id);
-        var replay = call(employee, "POST", path(id, "replies"), body, key, "\"0\"");
-        ok(replay, 1);
-        assertThat(data(replay).path("resourceId").asText()).isEqualTo(id.toString());
-        assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-        assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
-        error(call(employee, "POST", path(id, "replies"), Map.of("content", " original "), key, "\"0\""), 409, "IDEMPOTENCY_CONFLICT");
-        error(call(employee, "POST", path(id, "replies"), body, key, "\"1\""), 409, "IDEMPOTENCY_CONFLICT");
-        error(call(employee, "POST", path(id, "replies"), body, key, null), 428, "PRECONDITION_REQUIRED");
-        error(call(employee, "POST", path(id, "replies"), body, key, "invalid"), 400, "VALIDATION_FAILED");
-        error(post(employee, id, "replies", body, 0), 409, "VERSION_CONFLICT");
-        assertThat(count("ticket_reply")).isEqualTo(2); assertThat(count("audit_event")).isEqualTo(2);
-        assertThat(version(id)).isEqualTo(2);
-        UUID second = ticket();
-        ok(call(employee, "POST", path(second, "replies"), body, key, "\"0\""), 1);
-        ok(call(engineer, "POST", path(second, "replies"), body, key, "\"1\""), 2);
-        ok(call(engineer, "POST", path(second, "internal-notes"), body, key, "\"2\""), 3);
-    }
+
 
     @Test
     void invalidInputSessionAndCsrfFollowExistingContract() throws Exception {
@@ -206,8 +185,6 @@ class M04HttpTest {
             error(post(employee, id, "replies", body, 0), 400, "VALIDATION_FAILED");
         error(post(employee, id, "replies", null, 0), 400, "VALIDATION_FAILED");
         error(post(employee, id, "replies", Map.of("content", "x".repeat(256 * 1024)), 0), 413, "REQUEST_TOO_LARGE");
-        error(call(employee, "POST", path(id, "replies"), Map.of("content", "ok"), null, "\"0\""), 400, "VALIDATION_FAILED");
-        error(call(employee, "POST", path(id, "replies"), Map.of("content", "ok"), "invalid", "\"0\""), 400, "VALIDATION_FAILED");
         var anon = new Browser(HttpClient.newHttpClient(), null);
         error(call(anon, "GET", path(id, "replies"), null, null, null), 401, "SESSION_EXPIRED");
         error(post(anon, id, "replies", Map.of("content", "ok"), 0), 401, "SESSION_EXPIRED");
@@ -230,7 +207,7 @@ class M04HttpTest {
         // Equal timestamps exercise the UUID tie breaker independently of insertion order.
         db.execute("UPDATE ticket_reply SET created_at=TIMESTAMPTZ '2026-10-16 00:00:00+00'");
         db.execute("UPDATE audit_event SET created_at=TIMESTAMPTZ '2026-10-16 00:00:00+00'");
-        long auditCount = count("audit_event"), idemCount = count("idempotency_record");
+        long auditCount = count("audit_event");
         var activity = db.queryForList("SELECT token_hash,last_user_activity_at FROM auth_session ORDER BY token_hash");
         for (String action : List.of("replies", "operations")) {
             var first = page(employee, id, action);
@@ -252,7 +229,7 @@ class M04HttpTest {
         var staffEvents = page(admin, id, "operations").toString()
             + page(admin, id, "operations?page=2") + page(admin, id, "operations?page=3");
         assertThat(staffEvents).contains("internal reason marker").doesNotContain("raw audit marker");
-        assertThat(count("audit_event")).isEqualTo(auditCount); assertThat(count("idempotency_record")).isEqualTo(idemCount);
+        assertThat(count("audit_event")).isEqualTo(auditCount);
         assertThat(db.queryForList("SELECT token_hash,last_user_activity_at FROM auth_session ORDER BY token_hash")).isEqualTo(activity);
     }
 
@@ -264,63 +241,32 @@ class M04HttpTest {
             var two = pool.submit(() -> { start.await(); return post(engineer, id, "internal-notes", Map.of("content", "two"), 0); });
             start.countDown();
             var results = List.of(one.get(25, TimeUnit.SECONDS), two.get(25, TimeUnit.SECONDS));
-            assertThat(results.stream().map(HttpResponse::statusCode).toList()).containsExactlyInAnyOrder(200, 409);
-            error(results.stream().filter(r -> r.statusCode() == 409).findFirst().orElseThrow(), 409, "VERSION_CONFLICT");
+            assertThat(results.stream().map(HttpResponse::statusCode).toList()).containsExactlyInAnyOrder(200, 200);
         }
-        assertThat(count("ticket_reply")).isEqualTo(1); assertThat(count("audit_event")).isEqualTo(1); assertThat(version(id)).isEqualTo(1);
+        assertThat(count("ticket_reply")).isEqualTo(2); assertThat(count("audit_event")).isEqualTo(2); assertThat(version(id)).isEqualTo(2);
         UUID resolved = ticket(); db.update("UPDATE ticket SET status='RESOLVED' WHERE id=?", resolved);
         var race = new CountDownLatch(1);
         try (var pool = Executors.newFixedThreadPool(2)) {
             var close = pool.submit(() -> { race.await(); return post(admin, resolved, "close", Map.of("reason", "confirmed"), 0); });
             var reply = pool.submit(() -> { race.await(); return post(engineer, resolved, "replies", Map.of("content", "racing"), 0); });
             race.countDown();
-            assertThat(List.of(close.get(25, TimeUnit.SECONDS).statusCode(), reply.get(25, TimeUnit.SECONDS).statusCode()))
-                .containsExactlyInAnyOrder(200, 409);
+            assertThat(close.get(25, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+            assertThat(reply.get(25, TimeUnit.SECONDS).statusCode()).isIn(200, 409);
         }
-        assertThat(version(resolved)).isEqualTo(1);
+        assertThat(db.queryForObject("SELECT status FROM ticket WHERE id=?", String.class, resolved)).isEqualTo("CLOSED");
     }
 
-    @Test
-    void inProgressKeyIsRetryableAndDuplicateConcurrentRequestsNeverDuplicateReply() throws Exception {
-        UUID id = ticket(); String key = UUID.randomUUID().toString();
-        var held = new CountDownLatch(1); var release = new CountDownLatch(1);
-        try (var pool = Executors.newSingleThreadExecutor()) {
-            var lock = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
-                db.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", Object.class,
-                    "IDEMPOTENCY:" + employeeId + ":POST /api/v1/tickets/" + id + "/replies:" + key);
-                held.countDown();
-                try { release.await(10, TimeUnit.SECONDS); } catch (InterruptedException ex) { throw new IllegalStateException(ex); }
-                return null;
-            }));
-            try {
-                assertThat(held.await(5, TimeUnit.SECONDS)).isTrue();
-                error(call(employee, "POST", path(id, "replies"), Map.of("content", "same"), key, "\"0\""), 409, "REQUEST_IN_PROGRESS");
-            } finally { release.countDown(); }
-            lock.get(15, TimeUnit.SECONDS);
-        }
-        var start = new CountDownLatch(1);
-        try (var pool = Executors.newFixedThreadPool(2)) {
-            var one = pool.submit(() -> { start.await(); return call(employee, "POST", path(id, "replies"), Map.of("content", "same"), key, "\"0\""); });
-            var two = pool.submit(() -> { start.await(); return call(employee, "POST", path(id, "replies"), Map.of("content", "same"), key, "\"0\""); });
-            start.countDown();
-            var results = List.of(one.get(25, TimeUnit.SECONDS), two.get(25, TimeUnit.SECONDS));
-            assertThat(results.stream().filter(r -> r.statusCode() == 200).count()).isGreaterThanOrEqualTo(1);
-            for (var response : results) if (response.statusCode() != 200) error(response, 409, "REQUEST_IN_PROGRESS");
-        }
-        ok(call(employee, "POST", path(id, "replies"), Map.of("content", "same"), key, "\"0\""), 1);
-        assertThat(count("ticket_reply")).isEqualTo(1); assertThat(count("audit_event")).isEqualTo(1);
-        assertThat(count("idempotency_record")).isEqualTo(2); assertThat(version(id)).isEqualTo(1);
-    }
+
 
     @Test
-    void auditFailureRollsBackReplyVersionAndIdempotency() throws Exception {
+    void auditFailureRollsBackReplyAndBusinessHistory() throws Exception {
         UUID id = ticket();
         db.execute("ALTER TABLE audit_event ADD CONSTRAINT m04_test_reject CHECK (action <> 'TICKET_REPLY')");
         try {
             var response = post(employee, id, "replies", Map.of("content", "must rollback"), 0);
             assertThat(response.statusCode()).isGreaterThanOrEqualTo(500);
             assertThat(count("ticket_reply")).isZero(); assertThat(count("audit_event")).isZero();
-            assertThat(count("idempotency_record")).isEqualTo(1); assertThat(version(id)).isZero();
+            assertThat(version(id)).isZero();
         } finally { db.execute("ALTER TABLE audit_event DROP CONSTRAINT m04_test_reject"); }
         ok(post(employee, id, "replies", Map.of("content", "recovered"), 0), 1);
     }
@@ -348,8 +294,7 @@ class M04HttpTest {
         String hold = System.getenv("OPENITSM_M04_HOLD_SECONDS");
         if (hold != null) {
             setUp();
-            System.out.println("M04_BROWSER_FIXTURE_READY " + M01IntegrationTest.PG.getJdbcUrl()
-                + " KEY_FILE=" + M01IntegrationTest.KEY_FILE);
+            System.out.println("M04_BROWSER_FIXTURE_READY " + M01IntegrationTest.PG.getJdbcUrl());
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.min(1200, Math.max(0, Integer.parseInt(hold))));
             String releaseFile = System.getenv("OPENITSM_M04_RELEASE_FILE");
             while (System.nanoTime() < deadline && (releaseFile == null || !java.nio.file.Files.exists(Path.of(releaseFile))))
@@ -365,21 +310,20 @@ class M04HttpTest {
             "--spring.datasource.url=" + M01IntegrationTest.PG.getJdbcUrl(),
             "--spring.datasource.username=" + M01IntegrationTest.PG.getUsername(),
             "--spring.datasource.password=" + M01IntegrationTest.PG.getPassword(),
-            "--openitsm.account-mail.enabled=false", "--openitsm.cookie-secure=false",
-            "--openitsm.cookie-name=openitsm-test-session", "--openitsm.origin=http://localhost:5173",
-            "--openitsm.account-mail-key-file=" + M01IntegrationTest.KEY_FILE)
+            "--openitsm.cookie-secure=false",
+            "--openitsm.cookie-name=openitsm-test-session", "--openitsm.origin=http://localhost:5173")
             .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         try {
             boolean ready = false;
             var probe = new Browser(HttpClient.newHttpClient(), null);
             for (int i = 0; i < 120 && process.isAlive(); i++) {
-                try { ready = call(probe, "GET", "/health/ready", null, null, null).statusCode() == 200; }
+                try { ready = call(probe, "GET", "/api/v1/auth/csrf", null, null, null).statusCode() == 200; }
                 catch (java.io.IOException ignored) { }
                 if (ready) break;
                 Thread.sleep(250);
             }
             assertThat(ready).as("Packaged application readiness; see " + log).isTrue();
-            assertThat(call(probe, "GET", "/health/live", null, null, null).statusCode()).isEqualTo(200);
+            assertThat(call(probe, "GET", "/api/v1/auth/csrf", null, null, null).statusCode()).isEqualTo(200);
             employee = signed("m04-employee@example.com"); engineer = signed("m04-engineer@example.com"); admin = signed("m04-admin@example.com");
             UUID id = ticket();
             var body = Map.of("content", "packaged public reply"); String key = UUID.randomUUID().toString();

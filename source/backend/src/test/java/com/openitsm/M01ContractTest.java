@@ -19,7 +19,7 @@ class M01ContractTest {
     }
 
     @Test
-    void accountTokensHave256BitEntropyAndOnlyDigestsAreStored() {
+    void accountTokensHave256BitEntropyAndDigestsVerifyIdentity() {
         String token = TokenCodec.token();
         assertThat(java.util.Base64.getUrlDecoder().decode(token)).hasSize(32);
         assertThat(TokenCodec.hash(token)).hasSize(64).isNotEqualTo(token);

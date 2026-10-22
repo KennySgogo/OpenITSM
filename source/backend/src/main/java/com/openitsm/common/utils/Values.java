@@ -39,9 +39,4 @@ public final class Values {
         return password;
     }
 
-    public static long version(String header) {
-        if (header == null) throw new BusinessException(428, "PRECONDITION_REQUIRED", "请提供资源版本");
-        if (!header.matches("\"[0-9]{1,18}\"")) throw BusinessException.field("If-Match", "版本格式错误");
-        return Long.parseLong(header.substring(1, header.length() - 1));
-    }
 }

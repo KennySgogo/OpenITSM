@@ -7,7 +7,6 @@ import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.BootstrapService;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -21,7 +20,6 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -34,7 +32,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import static org.assertj.core.api.Assertions.*;
 
 /** TCP HTTP against the actual Spring application and isolated PostgreSQL. */
@@ -42,6 +39,9 @@ import static org.assertj.core.api.Assertions.*;
 @ActiveProfiles("local")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class M04AttachmentHttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static final Path STORAGE_ROOT = temporaryStorage();
     static Path temporaryStorage() { try { return java.nio.file.Files.createTempDirectory("openitsm-attachment-test-"); } catch (java.io.IOException ex) { throw new ExceptionInInitializerError(ex); } }
     @DynamicPropertySource
@@ -61,7 +61,7 @@ class M04AttachmentHttpTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M04 Admin", "m04-admin@example.com", password);
         employeeId = active("m04-employee@example.com", "EMPLOYEE");
         engineerId = active("m04-engineer@example.com", "ENGINEER");
@@ -83,8 +83,8 @@ class M04AttachmentHttpTest {
             if (browser.csrf() != null) request.header("X-CSRF-Token", browser.csrf());
         }
         if (body != null) request.header("Content-Type", "application/json");
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -114,8 +114,8 @@ class M04AttachmentHttpTest {
     }
     void ok(HttpResponse<String> response, long version) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
-        assertThat(data(response).path("acceptedVersion").asLong()).isEqualTo(version);
-        assertThat(response.headers().firstValue("ETag")).contains("\"" + version + "\"");
+
+
     }
     void error(HttpResponse<String> response, int status, String code) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(status);
@@ -145,8 +145,8 @@ class M04AttachmentHttpTest {
             .timeout(Duration.ofSeconds(25)).header("Origin", "http://localhost:5173")
             .header("Content-Type", "multipart/form-data; boundary=m04-boundary");
         if (actor.csrf() != null) builder.header("X-CSRF-Token", actor.csrf());
-        if (key != null) builder.header("Idempotency-Key", key);
-        if (version != null) builder.header("If-Match", version);
+
+
         builder.POST(chunked ? HttpRequest.BodyPublishers.fromPublisher(body) : body);
         return actor.client().send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
@@ -218,8 +218,6 @@ class M04AttachmentHttpTest {
         for (String extra : List.of(field("unexpected", "x"), field("visibility", "PUBLIC"), field("file", "not a file")))
             error(upload(employee, id, "PUBLIC", "one", bytes, key, "\"0\"", extra, false), 400, "VALIDATION_FAILED");
         error(upload(employee, id, "invalid", "one", bytes, 0), 400, "VALIDATION_FAILED");
-        error(upload(employee, id, "PUBLIC", "one", bytes, key, null, "", false), 428, "PRECONDITION_REQUIRED");
-        error(upload(employee, id, "PUBLIC", "one", bytes, null, "\"0\"", "", false), 400, "VALIDATION_FAILED");
         error(upload(new Browser(employee.client(), "x".repeat(64)), id, "PUBLIC", "one", bytes, 0), 403, "CSRF_INVALID");
         error(upload(new Browser(HttpClient.newHttpClient(), null), id, "PUBLIC", "one", bytes, 0), 401, "SESSION_EXPIRED");
         error(call(stranger, "GET", path(id, "attachments"), null, null, null), 404, "RESOURCE_NOT_FOUND");
@@ -227,20 +225,7 @@ class M04AttachmentHttpTest {
         assertThat(files()).isEqualTo(before); assertThat(count("ticket_attachment")).isZero(); assertThat(version(id)).isZero();
     }
 
-    @Test
-    void sameKeyHashesBytesNameVisibilityAndVersionAndReplaysAfterClosure() throws Exception {
-        UUID id = ticket(); String key = UUID.randomUUID().toString(); byte[] bytes = {1, 2}; long before = files();
-        ok(upload(engineer, id, "PUBLIC", "original.bin", bytes, key, "\"0\"", "", false), 1);
-        db.update("UPDATE ticket SET status='CLOSED' WHERE id=?", id);
-        var replay = upload(engineer, id, "PUBLIC", "original.bin", bytes, key, "\"0\"", "", false);
-        ok(replay, 1); assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
-        error(upload(engineer, id, "PUBLIC", "renamed.bin", bytes, key, "\"0\"", "", false), 409, "IDEMPOTENCY_CONFLICT");
-        error(upload(engineer, id, "PUBLIC", "original.bin", new byte[]{2, 1}, key, "\"0\"", "", false), 409, "IDEMPOTENCY_CONFLICT");
-        error(upload(engineer, id, "INTERNAL", "original.bin", bytes, key, "\"0\"", "", false), 409, "IDEMPOTENCY_CONFLICT");
-        error(upload(engineer, id, "PUBLIC", "original.bin", bytes, key, "\"1\"", "", false), 409, "IDEMPOTENCY_CONFLICT");
-        assertThat(files()).isEqualTo(before + 1); assertThat(count("ticket_attachment")).isEqualTo(1);
-        assertThat(count("audit_event")).isEqualTo(1); assertThat(version(id)).isEqualTo(1);
-    }
+
 
     @Test
     void paginationFiltersBeforeCountingAndReadsDoNotWriteOrTouchSession() throws Exception {
@@ -248,7 +233,7 @@ class M04AttachmentHttpTest {
         for (int i = 0; i < 23; i++) ok(upload(employee, id, "PUBLIC", "public-" + i, new byte[]{1}, i), i + 1);
         ok(upload(engineer, id, "INTERNAL", "private", new byte[]{2}, 23), 24);
         var activity = db.queryForList("SELECT token_hash,last_user_activity_at FROM auth_session ORDER BY token_hash");
-        long audit = count("audit_event"), idem = count("idempotency_record");
+        long audit = count("audit_event");
         assertThat(page(employee, id, "attachments").path("items").size()).isEqualTo(20);
         var second = page(employee, id, "attachments?page=2");
         assertThat(second.path("total").asInt()).isEqualTo(23); assertThat(second.path("items").size()).isEqualTo(3);
@@ -256,7 +241,7 @@ class M04AttachmentHttpTest {
         assertThat(page(employee, id, "attachments?page=99").path("items").isEmpty()).isTrue();
         for (String invalid : List.of("0", "-1", "abc", "2147483648", ""))
             error(call(employee, "GET", path(id, "attachments?page=" + invalid), null, null, null), 400, "INVALID_QUERY");
-        assertThat(count("audit_event")).isEqualTo(audit); assertThat(count("idempotency_record")).isEqualTo(idem);
+        assertThat(count("audit_event")).isEqualTo(audit);
         assertThat(db.queryForList("SELECT token_hash,last_user_activity_at FROM auth_session ORDER BY token_hash")).isEqualTo(activity);
     }
 
@@ -281,18 +266,17 @@ class M04AttachmentHttpTest {
     }
 
     @Test
-    void concurrentUploadsWithOldVersionOnlyWriteOneAttachment() throws Exception {
+    void concurrentAppendUploadsBothPersistWithoutOverwritingFiles() throws Exception {
         UUID id = ticket(); long before = files(); var start = new CountDownLatch(1);
         try (var pool = Executors.newFixedThreadPool(2)) {
             var one = pool.submit(() -> { start.await(); return upload(employee, id, "PUBLIC", "one", new byte[]{1}, 0); });
             var two = pool.submit(() -> { start.await(); return upload(engineer, id, "INTERNAL", "two", new byte[]{2}, 0); });
             start.countDown();
             var responses = List.of(one.get(30, TimeUnit.SECONDS), two.get(30, TimeUnit.SECONDS));
-            assertThat(responses.stream().map(HttpResponse::statusCode).toList()).containsExactlyInAnyOrder(200, 409);
-            error(responses.stream().filter(r -> r.statusCode() == 409).findFirst().orElseThrow(), 409, "VERSION_CONFLICT");
+            assertThat(responses.stream().map(HttpResponse::statusCode).toList()).containsExactlyInAnyOrder(200, 200);
         }
-        assertThat(files()).isEqualTo(before + 1); assertThat(count("ticket_attachment")).isEqualTo(1);
-        assertThat(count("audit_event")).isEqualTo(1); assertThat(version(id)).isEqualTo(1);
+        assertThat(files()).isEqualTo(before + 2); assertThat(count("ticket_attachment")).isEqualTo(2);
+        assertThat(count("audit_event")).isEqualTo(2); assertThat(version(id)).isEqualTo(2);
     }
 
     @Test
@@ -306,11 +290,9 @@ class M04AttachmentHttpTest {
         Path displaced = STORAGE_ROOT.resolveSibling(STORAGE_ROOT.getFileName() + "-displaced");
         java.nio.file.Files.move(STORAGE_ROOT, displaced);
         try {
-            assertThat(call(employee, "GET", "/health/ready", null, null, null).statusCode()).isEqualTo(503);
             error(upload(employee, id, "PUBLIC", "unavailable", new byte[]{1}, 1), 503, "DEPENDENCY_UNAVAILABLE");
             assertThat(version(id)).isEqualTo(1);
         } finally { java.nio.file.Files.move(displaced, STORAGE_ROOT); }
-        assertThat(call(employee, "GET", "/health/ready", null, null, null).statusCode()).isEqualTo(200);
     }
 
     @Test

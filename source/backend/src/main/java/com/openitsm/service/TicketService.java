@@ -12,6 +12,6 @@ public interface TicketService {
     TicketPageVO list(AuthContext context, String view, String page, String status, String businessType, String q, com.openitsm.dto.TicketQueryRequest filters);
     java.util.Map<String, Object> filterOptions(AuthContext context);
     TicketVO detail(AuthContext context, UUID id);
-    CreatedTicketVO create(AuthContext context, CreateTicketRequest body, String keyHeader, UUID requestId);
-    ActionVO change(AuthContext context, UUID id, String action, Object body, String versionHeader, String keyHeader, UUID requestId);
+    CreatedTicketVO create(AuthContext context, CreateTicketRequest body, UUID requestId);
+    ActionVO change(AuthContext context, UUID id, String action, Object body, UUID requestId);
 }

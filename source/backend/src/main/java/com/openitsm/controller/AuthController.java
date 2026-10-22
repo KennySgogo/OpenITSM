@@ -62,7 +62,6 @@ public class AuthController {
     @GetMapping("/me")
     public ApiResponse<?> me(HttpServletRequest req, HttpServletResponse res) {
         AuthContext ctx = RequestAuthentication.from(req);
-        res.setHeader("ETag", "\"" + ctx.user().version + "\"");
         return ApiResponse.of(req, auth.view(ctx.user(), ctx.session(), ctx.rawToken(), null));
     }
 

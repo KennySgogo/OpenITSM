@@ -41,13 +41,12 @@
 | 找回申请 | POST `/api/v1/auth/password-reset-requests` | 仅传 email；展示统一 message | 原文错误；429 禁用提交 |
 | 密码重置 | POST `/api/v1/auth/password-resets` | token/password/confirmPassword；清会话、回登录 | 字段原文；TOKEN_INVALID 返回申请 |
 | 列表/筛选/分页 | GET `/api/v1/users` | 仅 page/q/role/status；固定 20 条 | 页内错误、重试/重置筛选 |
-| 邀请成员 | POST `/api/v1/users` | name/email/role；仅 Idempotency-Key；关闭弹窗刷新 | API 邀请规格无 If-Match，不构造版本；失败复用快照重试 |
-| 改名/改角色 | PATCH `/api/v1/users/{id}` | name/role；If-Match 为列表 version；Idempotency-Key 为 UUID | 版本冲突关闭旧操作、刷新后用户重新确认 |
-| 停用 | POST `/api/v1/users/{id}/disable` | 仅 ACTIVE；reason 5～500 字符；版本与幂等头 | 失效状态刷新；末位管理员、交接限制原文展示 |
-| 解锁 | POST `/api/v1/users/{id}/unlock` | 仅 lockedUntil 晚于当前时间；无正文；版本与幂等头 | 原文错误，必要时刷新列表 |
-| 重发邀请 | POST `/api/v1/users/{id}/invitation-resend` | 仅 INVITED；无正文；版本与幂等头；提示已受理 | 429 按 Retry-After；旧邀请将失效，提交前说明 |
+| 邀请成员 | POST `/api/v1/users` | name/email/role；会话与 CSRF | API 邀请规格无 事务内业务检查 |
+| 改名/改角色 | PATCH `/api/v1/users/{id}` | name/role；事务内业务检查 | 状态或角色冲突时刷新后重新确认 |
+| 停用 | POST `/api/v1/users/{id}/disable` | 仅 ACTIVE；reason 5～500 字符；会话与 CSRF | 失效状态刷新；末位管理员、交接限制原文展示 |
+| 解锁 | POST `/api/v1/users/{id}/unlock` | 仅 lockedUntil 晚于当前时间；无正文；会话与 CSRF | 原文错误，必要时刷新列表 |
+| 重发邀请 | POST `/api/v1/users/{id}/invitation-resend` | 仅 INVITED；无正文；会话与 CSRF；提示已受理 | 429 按 Retry-After；旧邀请将失效，提交前说明 |
 | 不调用 | GET `/api/v1/users/assignees` | M02+ 分派场景，无入口 | 不属于 M01 前端 |
-| 不调用 | GET `/health/live`、GET `/health/ready` | 本机运维用途 | 浏览器不调用；17 个接口中前端覆盖 14 个 |
 
 ## 错误处理映射表
 
@@ -56,26 +55,22 @@
 | VALIDATION_FAILED | 展示后端 message 与全部 fieldErrors，不覆盖原文 |
 | SESSION_EXPIRED | 清本地会话与 token、停止心跳，登录页携带 returnTo，保留原文提示 |
 | AUTH_INVALID | 登录表单展示原文，不重定向循环 |
-| CSRF_INVALID | 获取新 token；原键、原版本、原正文重试一次；第二次失败整页刷新 |
+| CSRF_INVALID | 获取新 token；原正文重试一次；第二次失败整页刷新 |
 | FORBIDDEN | 页面或弹窗内展示原文，停止操作；不白屏 |
 | RESOURCE_NOT_FOUND | 原文提示，刷新成员列表 |
 | METHOD_NOT_ALLOWED | 原文及 requestId 展示，作为请求缺陷排查 |
-| REQUEST_IN_PROGRESS | 每 1 秒同键同正文自动重试，最多 2 次；仍失败可手动重试原操作 |
 | REQUEST_TOO_LARGE | 原文及 requestId，停止自动重试 |
 | MEDIA_TYPE_UNSUPPORTED | 有正文统一 application/json 预防；仍发生则原文展示 |
 | RATE_LIMITED | 原文展示，按 Retry-After 计算截止时间，禁用提交；activity 的限流按服务器等待时间单独调度 |
 | INTERNAL_ERROR | 原文及 requestId，允许用户手动重试 |
-| DEPENDENCY_UNAVAILABLE | 原文提示；成员操作保留原请求快照供重试，不声称邮件已发送 |
-| PRECONDITION_REQUIRED | 原文提示，关闭旧操作、刷新列表后重新确认 |
-| VERSION_CONFLICT | 原文提示，关闭旧操作、刷新列表，绝不自动覆盖新版本 |
-| IDEMPOTENCY_CONFLICT | 原文提示，结束旧操作；用户重新打开操作时生成新键 |
+| DEPENDENCY_UNAVAILABLE | 原文提示；刷新成员状态确认结果，不声称邮件已发送 |
 | EMAIL_EXISTS | 邀请弹窗展示原文，允许修改邮箱 |
 | LAST_ADMIN | 弹窗原文提示，允许用户调整操作 |
 | MEMBER_HAS_OPEN_TICKETS | 原文提示，不提供未实现的交接界面 |
 | INVALID_STATE | 原文提示并刷新列表 |
 | INVALID_QUERY | 原文提示，可重置筛选 |
 | TOKEN_INVALID | 原文提示；激活联系管理员，重置提供重新申请入口 |
-| 网络失败/非 JSON 响应 | 只在不存在后端 message 时提供本地连接/解析提示；成员网络重试复用快照 |
+| 网络失败/非 JSON 响应 | 只在不存在后端 message 时提供本地连接/解析提示；成员操作结果未知时先刷新核对 |
 
 ## 差异与工程决策
 
@@ -86,7 +81,7 @@
 | 超范围元素 | 去掉第三方登录、记住我、通知、全局搜索、导出、多余角色、最近活跃时间与全部工单内容 |
 | 激活画面 | 图中是“查收激活邮件”，本次按 API 实现邮件链接进入后设置密码；无匿名重发邀请接口 |
 | 密码规则 | 图中 8 位与特殊符号要求不采用；以 API 的 Unicode 12～64、字母和数字为准 |
-| 邀请 If-Match | 用户通用要求与接口单项规格冲突，按 API 优先：邀请无现有成员版本，只带幂等键 |
+| 邀请 | 提交姓名、邮箱、角色，服务端检查邮箱唯一性并创建待激活账号 |
 | 解锁状态 | 原 API 缺锁定字段；经用户确认新增 UserVO.lockedUntil，并同步 API；无数据库迁移 |
 | local 端口 | STATUS 历史为 18080，本次真实启动 8080；集中 BackendConfig.ts，支持进程变量覆盖 |
 | CSRF 刷新 | 内存丢失时按 API 先 GET csrf；me 恢复 token。采用同源 Vite 代理，保留浏览器自动 Origin，不改安全配置 |

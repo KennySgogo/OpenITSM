@@ -7,14 +7,12 @@ import com.openitsm.dto.TicketReasonRequest;
 import com.openitsm.dto.ResolveTicketRequest;
 import com.openitsm.dto.ChangeTicketPriorityRequest;
 import com.openitsm.dto.ConfirmTicketClassificationRequest;
-import com.openitsm.common.utils.Values;
 import com.openitsm.entity.TicketEntity;
 import com.openitsm.mapper.TicketMapper;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.mapper.TransactionLockMapper;
 import com.openitsm.service.AuditService;
 import com.openitsm.service.AuthContext;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketService;
 import com.openitsm.service.TicketNotificationService;
@@ -29,7 +27,6 @@ import java.util.HashSet;
 import java.util.stream.Collectors;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.Set;
@@ -43,16 +40,15 @@ public class TicketServiceImpl implements TicketService {
     private final TicketMapper tickets;
     private final com.openitsm.mapper.TicketTypeMapper types;
     private final UserMapper users;
-    private final IdempotencyService idem;
     private final SessionService sessions;
     private final Clock clock;
     private final TransactionLockMapper locks;
     private final AuditService audit;
     private final TicketNotificationService notifications;
 
-    public TicketServiceImpl(TicketMapper tickets, UserMapper users, IdempotencyService idem, SessionService sessions, Clock clock,
+    public TicketServiceImpl(TicketMapper tickets, UserMapper users, SessionService sessions, Clock clock,
         TransactionLockMapper locks, AuditService audit, TicketNotificationService notifications, com.openitsm.mapper.TicketTypeMapper types) {
-        this.tickets = tickets; this.users = users; this.idem = idem; this.sessions = sessions; this.clock = clock;
+        this.tickets = tickets; this.users = users; this.sessions = sessions; this.clock = clock;
         this.locks = locks; this.audit = audit;
         this.notifications = notifications; this.types = types;
     }
@@ -139,35 +135,17 @@ public class TicketServiceImpl implements TicketService {
 
     @Override
     @Transactional
-    public CreatedTicketVO create(AuthContext context, CreateTicketRequest body, String keyHeader, UUID requestId) {
+    public CreatedTicketVO create(AuthContext context, CreateTicketRequest body, UUID requestId) {
         String title = requiredText(body.title(), "title");
         String description = requiredText(body.description(), "description");
         String priority = body.priority() == null ? "P3" : body.priority();
         if (!Set.of("P1", "P2", "P3", "P4").contains(priority)) throw BusinessException.field("priority", "请选择 P1～P4");
         String impactScope = requiredText(body.impactScope(), "impactScope");
-        UUID key = idem.key(keyHeader);
-        String operation = "POST /api/v1/tickets";
-        // Preserve the exact serialization of the old four-field successful request.
-        Object hashBody = body;
-        boolean legacy = body.businessTypeId() == null && body.assigneeId() == null && body.priority() == null;
-        if (legacy) {
-            var old = new LinkedHashMap<String, Object>();
-            old.put("title", body.title()); old.put("description", body.description());
-            old.put("businessType", body.businessType()); old.put("impactScope", body.impactScope()); hashBody = old;
-        }
-        String hash = idem.hash(hashBody, null);
         UUID actorId = context.user().id;
-        idem.reserve(actorId, operation, key);
         locks.lock("MEMBERS", "CONTROL");
         var actor = users.lock(actorId);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
-        var previous = idem.replay(actorId, operation, key, hash);
-        if (previous != null) {
-            var ticket = tickets.selectById(previous.resourceId());
-            if (ticket == null) throw new IllegalStateException("Idempotent ticket is missing");
-            return new CreatedTicketVO(ticket.id, ticket.number, previous.replayed());
-        }
         if (body.businessType() != null) throw BusinessException.field("businessType", "请选择统一业务类型");
         var target = body.assigneeId() == null ? null : users.lock(body.assigneeId());
         if (body.assigneeId() != null && (target == null || !"ACTIVE".equals(target.status) || !Set.of("ENGINEER", "ADMIN").contains(target.role)))
@@ -188,21 +166,15 @@ public class TicketServiceImpl implements TicketService {
             audit.appendTicket(actorId, "TICKET_ASSIGNMENTS", ticket.id, Map.of("before", before, "after", snapshot(ticket)), null, requestId);
             notifications.enqueue(ticket, actorId, "assignments");
         }
-        var accepted = idem.save(actorId, operation, key, hash, ticket.id, ticket.version, 201);
         sessions.touch(context.session().hash());
-        return new CreatedTicketVO(ticket.id, ticket.number, accepted.replayed());
+        return new CreatedTicketVO(ticket.id, ticket.number);
     }
 
     @Override
     @Transactional
     public ActionVO change(AuthContext context, UUID id, String action, Object body,
-        String versionHeader, String keyHeader, UUID requestId) {
-        long expectedVersion = Values.version(versionHeader);
-        UUID key = idem.key(keyHeader);
-        String operation = "POST /api/v1/tickets/" + id + "/" + action;
-        String hash = idem.hash(body, versionHeader);
+        UUID requestId) {
         UUID actorId = context.user().id;
-        idem.reserve(actorId, operation, key);
         // Match M01's member-control -> member rows order before locking the ticket.
         // This keeps assignment and member disable/demotion mutually consistent.
         locks.lock("MEMBERS", "CONTROL");
@@ -216,9 +188,6 @@ public class TicketServiceImpl implements TicketService {
         TicketEntity ticket = tickets.lock(id);
         if (ticket == null || ("EMPLOYEE".equals(actor.role) && !actorId.equals(ticket.requesterId)))
             throw new BusinessException(404, "RESOURCE_NOT_FOUND", "工单不存在或不可访问");
-        var previous = idem.replay(actorId, operation, key, hash);
-        if (previous != null) return previous;
-        if (ticket.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "工单已更新，请刷新后重试");
         boolean admin = "ADMIN".equals(actor.role);
         boolean engineer = "ENGINEER".equals(actor.role);
         boolean owner = (engineer || admin) && actorId.equals(ticket.assigneeId);
@@ -230,8 +199,9 @@ public class TicketServiceImpl implements TicketService {
         if ("REJECTED".equals(ticket.status)) throw new BusinessException(409, "INVALID_STATE", "已拒绝工单只读，请按需新建工单");
         switch (action) {
             case "claim" -> {
-                requirePermission((engineer || admin) && (ticket.assigneeId == null || owner));
+                requirePermission(engineer || admin);
                 requireState(ticket, "NEW");
+                requirePermission(ticket.assigneeId == null || owner);
                 ticket.assigneeId = actorId; ticket.status = "IN_PROGRESS";
             }
             case "assignments", "transfers" -> {
@@ -241,6 +211,7 @@ public class TicketServiceImpl implements TicketService {
                     throw BusinessException.field("assigneeId", "请选择有效的在职工程师或管理员");
                 if (action.equals("transfers") && target.id.equals(ticket.assigneeId))
                     throw BusinessException.field("assigneeId", "请选择其他工程师");
+                if (target.id.equals(ticket.assigneeId)) return new ActionVO(id);
                 ticket.assigneeId = target.id;
             }
             case "suspensions" -> {
@@ -294,6 +265,7 @@ public class TicketServiceImpl implements TicketService {
                 requirePermission(admin || owner || ("NEW".equals(ticket.status) && requester));
                 if (classificationType == null || !classificationType.active)
                     throw BusinessException.field("businessTypeId", "类型已失效，请重新选择");
+                if (classificationType.id.equals(ticket.businessTypeId)) return new ActionVO(id);
                 before.put("businessTypeId", ticket.businessTypeId);
                 ticket.businessTypeId = classificationType.id;
                 ticket.businessType = classificationType.name;
@@ -308,7 +280,7 @@ public class TicketServiceImpl implements TicketService {
             Map.of("before", before, "after", after), reason, requestId);
         if (!"classifications".equals(action)) notifications.enqueue(ticket, actorId, action);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, key, hash, id, ticket.version, 200);
+        return new ActionVO(id);
     }
 
     private void requirePermission(boolean permitted) {

@@ -20,29 +20,24 @@ public class TicketTypeController {
         return ApiResponse.of(request, Map.of("items", service.list(RequestAuthentication.from(request), view)));
     }
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody SaveTicketTypeRequest body,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        var result = service.create(RequestAuthentication.from(request), body, key);
+    public ResponseEntity<?> create(@RequestBody SaveTicketTypeRequest body, HttpServletRequest request) {
+        var result = service.create(RequestAuthentication.from(request), body);
         var response = ResponseEntity.status(201);
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+
         return response.body(ApiResponse.of(request, result));
     }
     @PatchMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable UUID id, @RequestBody SaveTicketTypeRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> update(@PathVariable UUID id, @RequestBody SaveTicketTypeRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> remove(@PathVariable UUID id,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, null, version, key, request);
+    public ResponseEntity<?> remove(@PathVariable UUID id, HttpServletRequest request) {
+        return change(id, null, request);
     }
-    private ResponseEntity<?> change(UUID id, SaveTicketTypeRequest body, String version, String key, HttpServletRequest request) {
-        var result = service.change(RequestAuthentication.from(request), id, body, version, key);
-        var response = ResponseEntity.ok().eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+    private ResponseEntity<?> change(UUID id, SaveTicketTypeRequest body, HttpServletRequest request) {
+        var result = service.change(RequestAuthentication.from(request), id, body);
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, result));
     }
 }

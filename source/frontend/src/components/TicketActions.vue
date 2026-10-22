@@ -4,7 +4,6 @@ import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from './ErrorNotice.vue';
 import { request } from '../api/HttpClient';
-import type { RequestOptions } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { sessionState } from '../stores/SessionStore';
 import { ticketOperations, ticketOperationLabels } from '../utils/TicketPolicy';
@@ -24,8 +23,7 @@ const form = ref<FormInstance>();
 const model = reactive({ assigneeId: '', reason: '', summary: '', priority: 'P3' });
 const assignees = ref<Assignee[]>([]);
 const candidatesReady = ref(false);
-const pending = ref<{ path: string; options: RequestOptions }>();
-watch(() => busy.value || !!pending.value, value => emit('lock', value), { immediate: true });
+watch(() => busy.value, value => emit('lock', value), { immediate: true });
 onUnmounted(() => emit('lock', false));
 const choosingAssignee = computed(() => ['assignments', 'transfers'].includes(operation.value));
 const needsReason = computed(() => ['suspensions', 'reopen', 'priority-changes', 'rejections'].includes(operation.value)
@@ -51,42 +49,29 @@ function open(action: TicketOperation) {
   if (blocked.value || props.refreshing || props.externalBlocked || !sessionState.session || !ticketOperations(props.ticket, sessionState.session.user).includes(action)) return;
   operation.value = action;
   Object.assign(model, { assigneeId: '', reason: '', summary: '', priority: props.ticket.priority });
-  pending.value = undefined;
+
   error.value = undefined;
   dialog.value = true;
   if (choosingAssignee.value) void loadAssignees();
 }
 async function submit() {
   if (blocked.value || props.refreshing || props.externalBlocked || (choosingAssignee.value && !candidatesReady.value)) return;
-  busy.value = true;
+  if (!await form.value?.validate().catch(() => false)) return;
+  let body: unknown;
+  if (choosingAssignee.value) body = { assigneeId: model.assigneeId };
+  else if (operation.value === 'resolutions') body = { summary: model.summary };
+  else if (operation.value === 'priority-changes') body = { priority: model.priority, reason: model.reason };
+  else if (needsReason.value) body = { reason: model.reason };
+  busy.value = true; error.value = undefined;
   try {
-    if (!pending.value) {
-      if (!await form.value?.validate().catch(() => false)) return;
-      let body: unknown;
-      if (choosingAssignee.value) body = { assigneeId: model.assigneeId };
-      else if (operation.value === 'resolutions') body = { summary: model.summary };
-      else if (operation.value === 'priority-changes') body = { priority: model.priority, reason: model.reason };
-      else if (needsReason.value) body = { reason: model.reason };
-      pending.value = { path: `/tickets/${props.ticket.id}/${operation.value}`,
-        options: { method: 'POST', body, version: props.ticket.version, key: crypto.randomUUID() } };
-    }
-    error.value = undefined;
-    const result = await request<TicketAction>(pending.value.path, pending.value.options);
-    ElMessage.success(result.replayed ? '此操作此前已完成，正在刷新工单' : '工单操作已完成');
-    pending.value = undefined;
+    await request(`/tickets/${props.ticket.id}/${operation.value}`, { method: 'POST', body });
+    ElMessage.success('工单操作已完成');
     dialog.value = false;
     emit('refresh');
   } catch (value) {
     showError(value);
-    const failure = error.value!;
-    if (failure.status >= 400 && failure.status < 500 && !['REQUEST_IN_PROGRESS', 'RATE_LIMITED'].includes(failure.code)) {
-      pending.value = undefined;
-      if (['VERSION_CONFLICT', 'INVALID_STATE', 'RESOURCE_NOT_FOUND', 'FORBIDDEN', 'IDEMPOTENCY_CONFLICT'].includes(failure.code)) {
-        dialog.value = false;
-        // The parent retains this component while refreshing, so the server error remains visible.
-        emit('refresh');
-      }
-    }
+    dialog.value = false;
+    emit('refresh');
   } finally { busy.value = false; }
 }
 </script>
@@ -97,11 +82,11 @@ async function submit() {
     <ErrorNotice v-if="!dialog" :error="error" />
     <div class="action-buttons"><ElButton v-for="action in actions" :key="action" :disabled="blocked || refreshing || externalBlocked" @click="open(action)">{{ ticketOperationLabels[action] }}</ElButton></div>
     <p v-if="!actions.length">当前角色或状态下无可用操作。</p>
-    <ElDialog v-model="dialog" :title="ticketOperationLabels[operation]" width="500px" :close-on-click-modal="false" :close-on-press-escape="!busy && !pending" :show-close="!busy && !pending" :before-close="(done: () => void) => { if (!busy && !pending) done(); }" destroy-on-close>
+    <ElDialog v-model="dialog" :title="ticketOperationLabels[operation]" width="500px" :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" :before-close="(done: () => void) => { if (!busy) done(); }" destroy-on-close>
       <p>{{ ticket.number }} · {{ ticket.title }}</p>
       <ErrorNotice :error="error" />
-      <ElAlert v-if="pending && error" title="结果尚未确认，请重试原操作；原内容与版本已保留，避免重复执行。" type="info" :closable="false" />
-      <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || !!pending" @submit.prevent="submit">
+
+      <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy" @submit.prevent="submit">
         <ElFormItem v-if="choosingAssignee" label="目标负责人" prop="assigneeId"><ElSelect v-model="model.assigneeId" placeholder="请选择处理人" aria-label="目标负责人"><ElOption v-for="user in assignees" :key="user.id" :value="user.id" :label="`${user.name}（未解决 ${user.unresolvedCount}，待确认 ${user.pendingConfirmationCount}）`" /></ElSelect></ElFormItem>
         <ElFormItem v-if="operation === 'priority-changes'" label="优先级" prop="priority"><ElSelect v-model="model.priority" aria-label="优先级"><ElOption v-for="priority in ['P1', 'P2', 'P3', 'P4']" :key="priority" :value="priority" :label="priority" /></ElSelect></ElFormItem>
         <ElFormItem v-if="needsReason" label="操作原因" prop="reason"><ElInput v-model="model.reason" type="textarea" :rows="4" placeholder="请填写操作原因" /></ElFormItem>
@@ -110,9 +95,9 @@ async function submit() {
       <p v-if="operation === 'close'">确认关闭此工单。</p>
       <p v-if="operation === 'reopen'">重开后恢复为处理中，已关闭工单仅限关闭后 7 天内重开。</p>
       <template #footer>
-        <ElButton :disabled="busy || !!pending" @click="dialog = false">取消</ElButton>
+        <ElButton :disabled="busy" @click="dialog = false">取消</ElButton>
         <ElButton v-if="choosingAssignee && !candidatesReady" :disabled="blocked" @click="loadAssignees">重新加载处理人</ElButton>
-        <ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (choosingAssignee && !candidatesReady)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : pending ? '重试原操作' : '确认操作' }}</ElButton>
+        <ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || (choosingAssignee && !candidatesReady)" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : '确认操作' }}</ElButton>
       </template>
     </ElDialog>
   </section>

@@ -16,15 +16,10 @@ spring:
   flyway:
     clean-disabled: true
   mail:
-    host: ${OPENITSM_SMTP_HOST:}
-    port: ${OPENITSM_SMTP_PORT:465}
-    username: ${OPENITSM_SMTP_USERNAME:}
-    password: ${OPENITSM_SMTP_PASSWORD:}
+    port: 465
     properties:
       mail.smtp.auth: true
-      mail.smtp.ssl.enable: ${OPENITSM_SMTP_SSL_ENABLED:true}
-      mail.smtp.starttls.enable: ${OPENITSM_SMTP_STARTTLS_ENABLED:false}
-      mail.smtp.starttls.required: ${OPENITSM_SMTP_STARTTLS_ENABLED:false}
+      mail.smtp.ssl.enable: true
 server:
   address: 127.0.0.1
   port: 8080
@@ -38,18 +33,14 @@ springdoc:
   swagger-ui:
     enabled: false
 openitsm:
-  ticket-mail:
-    enabled: ${OPENITSM_TICKET_MAIL_ENABLED:false}
   attachments:
     root: ${OPENITSM_ATTACHMENT_ROOT:./.local/attachments}
   account-mail:
-    enabled: ${OPENITSM_ACCOUNT_MAIL_ENABLED:false}
     from: ${OPENITSM_MAIL_FROM:}
     public-base-url: ${OPENITSM_PUBLIC_BASE_URL:}
   origin: ${OPENITSM_ORIGIN:https://localhost}
   cookie-secure: true
   cookie-name: __Host-openitsm-session
-  account-mail-key-file: ${OPENITSM_ACCOUNT_MAIL_KEY_FILE:}
   bootstrap-name: ${OPENITSM_BOOTSTRAP_NAME:}
   bootstrap-email: ${OPENITSM_BOOTSTRAP_EMAIL:}
 mybatis-plus:

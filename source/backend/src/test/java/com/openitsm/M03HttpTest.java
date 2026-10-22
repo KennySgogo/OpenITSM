@@ -44,6 +44,9 @@ import static org.assertj.core.api.Assertions.*;
 @ActiveProfiles("local")
 @Import(M01IntegrationTest.TimeConfig.class)
 class M03HttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @AfterAll
     static void holdForPackagedApplicationVerification() throws InterruptedException {
         String hold = System.getenv("OPENITSM_M03_HOLD_SECONDS");
@@ -76,7 +79,7 @@ class M03HttpTest {
     @BeforeEach
     void setUp() throws Exception {
         clock.now = Instant.parse("2026-10-14T02:00:00Z");
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         adminId = bootstrap.initialize("M03 Admin", "m03-admin@example.com", password);
         employeeId = active("m03-employee@example.com", "EMPLOYEE");
         ownerId = active("m03-owner@example.com", "ENGINEER");
@@ -100,8 +103,8 @@ class M03HttpTest {
             if (browser.csrf() != null) builder.header("X-CSRF-Token", browser.csrf());
         }
         if (body != null) builder.header("Content-Type", "application/json");
-        if (key != null) builder.header("Idempotency-Key", key);
-        if (version != null) builder.header("If-Match", version);
+
+
         builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(builder.build(), HttpResponse.BodyHandlers.ofString());
@@ -134,8 +137,8 @@ class M03HttpTest {
 
     void ok(HttpResponse<String> response, long version) throws Exception {
         assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
-        assertThat(data(response).path("acceptedVersion").asLong()).isEqualTo(version);
-        assertThat(response.headers().firstValue("ETag")).contains("\"" + version + "\"");
+
+
     }
 
     void error(HttpResponse<String> response, int status, String code) throws Exception {
@@ -180,7 +183,7 @@ class M03HttpTest {
         assertThat(((java.sql.Timestamp) stored.get("cycle_started_at")).toInstant()).isEqualTo(clock.instant());
         assertThat(stored.get("priority")).isEqualTo("P1");
         assertThat(count("audit_event", id)).isEqualTo(9);
-        assertThat(count("idempotency_record", id)).isEqualTo(9);
+
         assertThat(db.queryForObject("SELECT reason FROM audit_event WHERE object_id=? AND action='TICKET_SUSPENSIONS'", String.class, id)).isEqualTo("waiting");
         assertThat(db.queryForObject("SELECT count(*) FROM audit_event WHERE object_id=? AND object_type='TICKET'", Integer.class, id)).isEqualTo(9);
     }
@@ -213,43 +216,7 @@ class M03HttpTest {
         assertThat(count("audit_event", id)).isZero();
     }
 
-    @Test
-    void everyActionRequiresHeadersAndReturnsOriginalSuccessOnReplay() throws Exception {
-        for (String name : actions) {
-            String initial = switch (name) { case "resume" -> "ON_HOLD"; case "close", "reopen" -> "RESOLVED"; case "claim" -> "NEW"; default -> "IN_PROGRESS"; };
-            UUID id = ticket(initial, ownerId);
-            Browser browser = List.of("assignments", "priority-changes").contains(name) ? admin : name.equals("close") ? employee : owner;
-            Object body = switch (name) {
-                case "assignments", "transfers" -> Map.of("assigneeId", otherId);
-                case "resolutions" -> Map.of("summary", "Fixed");
-                case "suspensions", "reopen" -> Map.of("reason", "Test reason");
-                case "priority-changes" -> Map.of("priority", "P2", "reason", "Test reason");
-                default -> null;
-            };
-            String path = "/api/v1/tickets/" + id + "/" + name, key = UUID.randomUUID().toString();
-            error(call(browser, "POST", path, body, key, null), 428, "PRECONDITION_REQUIRED");
-            error(call(browser, "POST", path, body, key, "0"), 400, "VALIDATION_FAILED");
-            error(call(browser, "POST", path, body, null, "\"0\""), 400, "VALIDATION_FAILED");
-            error(call(browser, "POST", path, body, key, "\"99\""), 409, "VERSION_CONFLICT");
-            ok(call(browser, "POST", path, body, key, "\"0\""), 1);
-            var replay = call(browser, "POST", path, body, key, "\"0\"");
-            ok(replay, 1); assertThat(data(replay).path("replayed").asBoolean()).isTrue();
-            assertThat(replay.headers().firstValue("Idempotent-Replayed")).contains("true");
-            error(call(browser, "POST", path, body, key, null), 428, "PRECONDITION_REQUIRED");
-            error(call(browser, "POST", path, body, UUID.randomUUID().toString(), "\"0\""), 409, "VERSION_CONFLICT");
-            Object changed = switch (name) {
-                case "assignments", "transfers" -> Map.of("assigneeId", ownerId);
-                case "resolutions" -> Map.of("summary", "Different");
-                case "suspensions", "reopen", "close" -> Map.of("reason", "Different");
-                case "priority-changes" -> Map.of("priority", "P4", "reason", "Different");
-                default -> null;
-            };
-            if (changed != null) error(call(browser, "POST", path, changed, key, "\"0\""), 409, "IDEMPOTENCY_CONFLICT");
-            assertThat(count("audit_event", id)).isEqualTo(1);
-            assertThat(count("idempotency_record", id)).isEqualTo(1);
-            assertThat(db.queryForObject("SELECT version FROM ticket WHERE id=?", Long.class, id)).isEqualTo(1);
-        }
-    }
+
 
     @Test
     void reasonsSummaryPriorityAndAssigneeAreValidated() throws Exception {
@@ -297,7 +264,7 @@ class M03HttpTest {
             start.countDown();
             var responses = List.of(one.get(30, TimeUnit.SECONDS), two.get(30, TimeUnit.SECONDS));
             assertThat(responses.stream().map(HttpResponse::statusCode)).containsExactlyInAnyOrder(200, 409);
-            for (var response : responses) if (response.statusCode() == 409) error(response, 409, "VERSION_CONFLICT");
+            for (var response : responses) if (response.statusCode() == 409) error(response, 409, "INVALID_STATE");
         }
         assertThat(state(id)).isEqualTo("IN_PROGRESS");
         assertThat(db.queryForObject("SELECT assignee_id FROM ticket WHERE id=?", UUID.class, id)).isIn(ownerId, otherId);
@@ -342,17 +309,17 @@ class M03HttpTest {
     }
 
     @Test
-    void transactionRollbackDoesNotLeaveStateAuditOrIdempotencyChanges() throws Exception {
+    void transactionRollbackDoesNotLeaveStateAndBusinessHistoryChanges() throws Exception {
         UUID id = ticket("IN_PROGRESS", ownerId);
         var login = auth.login("m03-owner@example.com", password, null);
         var context = new AuthContext(login.session(), login.user(), login.rawToken());
         String key = UUID.randomUUID().toString();
         assertThatThrownBy(() -> new TransactionTemplate(transactions).execute(status -> {
-            service.change(context, id, "suspensions", new TicketReasonRequest("Wait"), "\"0\"", key, UUID.randomUUID());
+            service.change(context, id, "suspensions", new TicketReasonRequest("Wait"), UUID.randomUUID());
             throw new IllegalStateException("Intentional test transaction rollback");
         })).isInstanceOf(IllegalStateException.class);
         assertThat(state(id)).isEqualTo("IN_PROGRESS");
-        assertThat(count("audit_event", id)).isZero(); assertThat(count("idempotency_record", id)).isZero();
+        assertThat(count("audit_event", id)).isZero();
         ok(call(owner, "POST", "/api/v1/tickets/" + id + "/suspensions", Map.of("reason", "Wait"), key, "\"0\""), 1);
     }
 
@@ -384,11 +351,7 @@ class M03HttpTest {
         error(action(new Browser(owner.client(), null), id, "claim", null, 0), 403, "CSRF_INVALID");
         assertThat(call(owner, "GET", "/api/v1/tickets", null, null, null).statusCode()).isEqualTo(200);
         assertThat(call(owner, "GET", "/api/v1/tickets/" + id, null, null, null).statusCode()).isEqualTo(200);
-        for (String health : List.of("live", "ready")) {
-            var response = call(owner, "GET", "/health/" + health, null, null, null);
-            assertThat(response.statusCode()).isEqualTo(200);
-            assertThat(json.readTree(response.body()).path("status").asText()).isEqualTo("UP");
-        }
+
         db.update("UPDATE app_user SET auth_version=auth_version+1 WHERE id=?", ownerId);
         error(action(owner, id, "claim", null, 0), 401, "SESSION_EXPIRED");
     }

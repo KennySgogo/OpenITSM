@@ -10,7 +10,6 @@ import com.openitsm.service.AccountMailDispatchService;
 import com.openitsm.service.AccountTokenService;
 import com.openitsm.service.AuthService;
 import com.openitsm.service.SmtpMailService;
-import com.openitsm.service.impl.AccountMailCipher;
 import com.openitsm.service.impl.AccountMailDispatchServiceImpl;
 import com.openitsm.service.impl.SmtpMailServiceImpl;
 import java.time.Duration;
@@ -37,6 +36,9 @@ import static org.mockito.Mockito.*;
 @ActiveProfiles("test")
 @Import(M01IntegrationTest.TimeConfig.class)
 class AccountMailDispatchTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static { System.setProperty("api.version", "1.44"); }
     static final PostgreSQLContainer<?> PG = new PostgreSQLContainer<>("postgres:17.11");
     @DynamicPropertySource static void properties(DynamicPropertyRegistry props) {
@@ -58,11 +60,8 @@ class AccountMailDispatchTest {
             props.add("spring.datasource.username", () -> user);
             props.add("spring.datasource.password", () -> password);
         }
-        props.add("openitsm.account-mail-key-file", M01IntegrationTest.KEY_FILE::toString);
-        props.add("openitsm.account-mail.enabled", () -> true);
         props.add("openitsm.account-mail.from", () -> "sender@example.com");
         props.add("openitsm.account-mail.public-base-url", () -> "http://localhost:5173");
-        props.add("openitsm.account-mail.initial-delay-ms", () -> 3600000);
         props.add("spring.mail.host", () -> "127.0.0.1");
         props.add("spring.mail.port", () -> 2525);
         props.add("spring.mail.properties.mail.smtp.auth", () -> false);
@@ -73,7 +72,6 @@ class AccountMailDispatchTest {
     @Autowired AuthService authService;
     @Autowired NotificationMapper tasks;
     @Autowired UserMapper users;
-    @Autowired AccountMailCipher cipher;
     @Autowired AccountMailConfig mailConfig;
     @Autowired AuthMapper authMapper;
     @Autowired com.openitsm.mapper.TicketMapper tickets;
@@ -85,7 +83,7 @@ class AccountMailDispatchTest {
     @BeforeEach void resetDatabase() {
         clock.now = Instant.parse("2026-10-15T02:00:00Z");
         // Same explicitly isolated container/test database convention as M01IntegrationTest.
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         reset(smtp);
     }
     UUID issue(String purpose) {
@@ -197,7 +195,7 @@ class AccountMailDispatchTest {
     @Test void tamperedPayloadOrWrongGenerationIsNotDelivered() {
         UUID tampered = issue("INVITE");
         UUID wrongGeneration = issue("INVITE");
-        db.update("UPDATE notification_task SET sealed_payload='invalid' WHERE recipient_id=?", tampered);
+        db.update("UPDATE notification_task SET delivery_token='invalid' WHERE recipient_id=?", tampered);
         db.update("UPDATE notification_task SET token_generation=99 WHERE recipient_id=?", wrongGeneration);
         assertThat(delivery.dispatchPending()).isEqualTo(2);
         assertThat(status(tampered)).isEqualTo("FAILED");
@@ -208,14 +206,14 @@ class AccountMailDispatchTest {
     @Test void activationCancelsQueuedInvitationAndUnknownTokenHashIsRejected() {
         for (String purpose : new String[] { "INVITE", "RESET" }) {
             UUID consumed = issue(purpose);
-            var row = db.queryForMap("SELECT sealed_payload,token_generation FROM notification_task WHERE recipient_id=?", consumed);
-            String raw = cipher.open((String) row.get("sealed_payload"), consumed + ":" + purpose + ":" + row.get("token_generation"));
+            var row = db.queryForMap("SELECT delivery_token,token_generation FROM notification_task WHERE recipient_id=?", consumed);
+            String raw = (String) row.get("delivery_token");
             authService.consume(raw, "TestPassword1234", purpose, UUID.randomUUID());
             assertThat(status(consumed)).isEqualTo("FAILED");
         }
         UUID forged = issue("INVITE");
-        String sealed = cipher.seal("b".repeat(43), forged + ":INVITE:1");
-        db.update("UPDATE notification_task SET sealed_payload=? WHERE recipient_id=?", sealed, forged);
+        String sealed = "b".repeat(43);
+        db.update("UPDATE notification_task SET delivery_token=? WHERE recipient_id=?", sealed, forged);
         assertThat(delivery.dispatchPending()).isEqualTo(1);
         assertThat(db.queryForObject("SELECT error_code FROM notification_task WHERE recipient_id=?", String.class, forged)).isEqualTo("TOKEN_INVALID");
         verifyNoInteractions(smtp);
@@ -250,7 +248,7 @@ class AccountMailDispatchTest {
         var failingMapper = mock(NotificationMapper.class, org.mockito.AdditionalAnswers.delegatesTo(tasks));
         doThrow(new IllegalStateException("simulated database write failure")).when(failingMapper)
             .finish(any(UUID.class), anyInt(), anyString(), nullable(String.class), any(Instant.class));
-        var uncertainWorker = new AccountMailDispatchServiceImpl(failingMapper, users, authMapper, cipher,
+        var uncertainWorker = new AccountMailDispatchServiceImpl(failingMapper, users, authMapper,
             smtp, mailConfig, clock, transactionManager, tickets);
         assertThatThrownBy(uncertainWorker::dispatchPending).isInstanceOf(IllegalStateException.class);
         assertThat(status(user)).isEqualTo("RUNNING");

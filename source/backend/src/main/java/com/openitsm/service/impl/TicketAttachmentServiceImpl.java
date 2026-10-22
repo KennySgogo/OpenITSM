@@ -2,7 +2,6 @@ package com.openitsm.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.config.AttachmentConfig;
 import com.openitsm.dto.UploadTicketAttachmentRequest;
 import com.openitsm.entity.TicketAttachmentEntity;
@@ -13,7 +12,6 @@ import com.openitsm.mapper.TicketMapper;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.AuditService;
 import com.openitsm.service.AuthContext;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketAttachmentService;
 import com.openitsm.vo.ActionVO;
@@ -45,30 +43,22 @@ public class TicketAttachmentServiceImpl implements TicketAttachmentService {
     private final TicketAttachmentMapper attachments;
     private final TicketMapper tickets;
     private final UserMapper users;
-    private final IdempotencyService idem;
     private final AuditService audit;
     private final SessionService sessions;
     private final Clock clock;
     private final Path root;
 
     public TicketAttachmentServiceImpl(TicketAttachmentMapper attachments, TicketMapper tickets, UserMapper users,
-        IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, AttachmentConfig config) throws IOException {
-        this.attachments = attachments; this.tickets = tickets; this.users = users; this.idem = idem;
+        AuditService audit, SessionService sessions, Clock clock, AttachmentConfig config) throws IOException {
+        this.attachments = attachments; this.tickets = tickets; this.users = users;
         this.audit = audit; this.sessions = sessions; this.clock = clock;
         Files.createDirectories(config.root());
         this.root = config.root().toRealPath();
     }
 
     @Override
-    public boolean storageReady() {
-        return Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && Files.isReadable(root) && Files.isWritable(root);
-    }
-
-    @Override
     @Transactional
-    public ActionVO upload(AuthContext context, UUID ticketId, UploadTicketAttachmentRequest body, String version, String key, UUID requestId) {
-        long expectedVersion = Values.version(version);
-        UUID requestKey = idem.key(key);
+    public ActionVO upload(AuthContext context, UUID ticketId, UploadTicketAttachmentRequest body, UUID requestId) {
         var file = body.file();
         if (file == null || file.isEmpty()) throw BusinessException.field("file", "请选择非空文件");
         if (file.getSize() > AttachmentConfig.MAX_FILE_SIZE) throw tooLarge();
@@ -89,10 +79,7 @@ public class TicketAttachmentServiceImpl implements TicketAttachmentService {
             contentHash = HexFormat.of().formatHex(digest.digest());
         } catch (IOException ex) { throw unavailable(); }
         catch (NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
-        String operation = "POST /api/v1/tickets/" + ticketId + "/attachments";
-        String hash = idem.hash(Map.of("fileName", originalName, "contentHash", contentHash, "visibility", body.visibility()), version);
         UUID actorId = context.user().id;
-        idem.reserve(actorId, operation, requestKey);
         var actor = users.lock(actorId);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
@@ -100,9 +87,6 @@ public class TicketAttachmentServiceImpl implements TicketAttachmentService {
         requireVisible(actor, ticket);
         boolean internal = "INTERNAL".equals(body.visibility());
         if (internal && "EMPLOYEE".equals(actor.role)) throw new BusinessException(403, "FORBIDDEN", "无操作权限");
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
-        if (ticket.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "工单已更新，请刷新后重试");
         if (!Set.of("NEW", "IN_PROGRESS", "ON_HOLD", "RESOLVED").contains(ticket.status))
             throw new BusinessException(409, "INVALID_STATE", "工单已关闭，不能上传附件，请新建工单");
         var attachment = new TicketAttachmentEntity();
@@ -132,7 +116,7 @@ public class TicketAttachmentServiceImpl implements TicketAttachmentService {
         audit.appendTicket(actorId, internal ? "TICKET_INTERNAL_ATTACHMENT" : "TICKET_ATTACHMENT", ticketId,
             Map.of("attachmentId", attachment.id, "fileName", attachment.fileName, "size", attachment.size), null, requestId);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, ticketId, ticket.version, 200);
+        return new ActionVO(ticketId);
     }
 
     @Override

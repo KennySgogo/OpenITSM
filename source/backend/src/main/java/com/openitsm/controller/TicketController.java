@@ -16,7 +16,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -54,52 +53,38 @@ public class TicketController {
     }
 
     @PostMapping({"/{id}/claim", "/{id}/resume"})
-    public ResponseEntity<?> emptyAction(@PathVariable UUID id, @RequestBody(required = false) Map<String, Object> body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
+    public ResponseEntity<?> emptyAction(@PathVariable UUID id, @RequestBody(required = false) Map<String, Object> body, HttpServletRequest request) {
         RequestAuthentication.emptyBody(body);
-        return change(id, null, version, key, request);
+        return change(id, null, request);
     }
 
     @PostMapping({"/{id}/assignments", "/{id}/transfers"})
-    public ResponseEntity<?> assign(@PathVariable UUID id, @RequestBody AssignTicketRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> assign(@PathVariable UUID id, @RequestBody AssignTicketRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
 
     @PostMapping({"/{id}/suspensions", "/{id}/reopen", "/{id}/rejections"})
-    public ResponseEntity<?> reasonAction(@PathVariable UUID id, @RequestBody TicketReasonRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> reasonAction(@PathVariable UUID id, @RequestBody TicketReasonRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
 
     @PostMapping("/{id}/close")
-    public ResponseEntity<?> close(@PathVariable UUID id, @RequestBody(required = false) TicketReasonRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> close(@PathVariable UUID id, @RequestBody(required = false) TicketReasonRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
 
     @PostMapping("/{id}/resolutions")
-    public ResponseEntity<?> resolve(@PathVariable UUID id, @RequestBody ResolveTicketRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> resolve(@PathVariable UUID id, @RequestBody ResolveTicketRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
 
     @PostMapping("/{id}/priority-changes")
-    public ResponseEntity<?> priority(@PathVariable UUID id, @RequestBody ChangeTicketPriorityRequest body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return change(id, body, version, key, request);
+    public ResponseEntity<?> priority(@PathVariable UUID id, @RequestBody ChangeTicketPriorityRequest body, HttpServletRequest request) {
+        return change(id, body, request);
     }
 
     @PostMapping("/{id}/classifications")
-    public ResponseEntity<?> classification(@PathVariable UUID id, @RequestBody JsonNode body,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
+    public ResponseEntity<?> classification(@PathVariable UUID id, @RequestBody JsonNode body, HttpServletRequest request) {
         if (body == null || !body.isObject() || body.size() != 1 || !body.path("businessTypeId").isTextual())
             throw BusinessException.field("businessTypeId", "请仅提交已有业务类型 ID");
         String raw = body.path("businessTypeId").textValue();
@@ -107,7 +92,7 @@ public class TicketController {
         try { typeId = UUID.fromString(raw); }
         catch (IllegalArgumentException ex) { throw BusinessException.field("businessTypeId", "业务类型 ID 无效"); }
         if (!raw.equalsIgnoreCase(typeId.toString())) throw BusinessException.field("businessTypeId", "业务类型 ID 无效");
-        return change(id, new ConfirmTicketClassificationRequest(typeId), version, key, request);
+        return change(id, new ConfirmTicketClassificationRequest(typeId), request);
     }
 
     @PostMapping("/{id}/ai/classification-suggestions")
@@ -117,21 +102,20 @@ public class TicketController {
         return ApiResponse.of(request, suggestions.suggest(RequestAuthentication.from(request), id));
     }
 
-    private ResponseEntity<?> change(UUID id, Object body, String version, String key, HttpServletRequest request) {
+    private ResponseEntity<?> change(UUID id, Object body, HttpServletRequest request) {
         String action = request.getRequestURI().substring(request.getRequestURI().lastIndexOf('/') + 1);
-        var result = service.change(RequestAuthentication.from(request), id, action, body, version, key,
+        var result = service.change(RequestAuthentication.from(request), id, action, body,
             UUID.fromString((String) request.getAttribute("requestId")));
-        var response = ResponseEntity.ok().eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, result));
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody CreateTicketRequest body,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        var ticket = service.create(RequestAuthentication.from(request), body, key, UUID.fromString((String) request.getAttribute("requestId")));
+    public ResponseEntity<?> create(@RequestBody CreateTicketRequest body, HttpServletRequest request) {
+        var ticket = service.create(RequestAuthentication.from(request), body, UUID.fromString((String) request.getAttribute("requestId")));
         var response = ResponseEntity.status(201);
-        if (ticket.replayed()) response.header("Idempotent-Replayed", "true");
+
         return response.body(ApiResponse.of(request, ticket));
     }
 }

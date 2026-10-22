@@ -6,5 +6,5 @@ import com.openitsm.vo.ProfileVO;
 
 public interface ProfileService {
     ProfileVO detail(AuthContext context);
-    ActionVO update(AuthContext context, UpdateProfileRequest body, String version, String key);
+    ActionVO update(AuthContext context, UpdateProfileRequest body);
 }

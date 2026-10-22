@@ -25,7 +25,6 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     private final NotificationMapper tasks;
     private final UserMapper users;
     private final AuthMapper auth;
-    private final AccountMailCipher cipher;
     private final SmtpMailService smtp;
     private final AccountMailConfig config;
     private final Clock clock;
@@ -36,9 +35,9 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
     private com.openitsm.service.RuntimeSettingsService runtimeSettings;
 
     public AccountMailDispatchServiceImpl(NotificationMapper tasks, UserMapper users, AuthMapper auth,
-                                         AccountMailCipher cipher, SmtpMailService smtp, AccountMailConfig config,
+                                         SmtpMailService smtp, AccountMailConfig config,
                                          Clock clock, PlatformTransactionManager transactionManager, TicketMapper tickets) {
-        this.tasks = tasks; this.users = users; this.auth = auth; this.cipher = cipher;
+        this.tasks = tasks; this.users = users; this.auth = auth;
         this.smtp = smtp; this.config = config; this.clock = clock;
         this.tickets = tickets;
         claims = new TransactionTemplate(transactionManager);
@@ -51,15 +50,14 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
 
     @Override
     public int dispatchPending() {
-        if (!config.enabled()) return 0;
         if (runtimeSettings == null) config.requireReady();
         else config.runtimeSender(runtimeSettings.current().smtp());
         int processed = 0;
         while (processed < BATCH_SIZE) {
             NotificationTaskEntity task = claims.execute(status -> {
                 Instant now = clock.instant();
-                tasks.expireExhausted(now, MAX_ATTEMPTS, config.ticketMailEnabled());
-                return tasks.claim(now, now.plusSeconds(LEASE_SECONDS), MAX_ATTEMPTS, config.ticketMailEnabled());
+                tasks.expireExhausted(now, MAX_ATTEMPTS);
+                return tasks.claim(now, now.plusSeconds(LEASE_SECONDS), MAX_ATTEMPTS);
             });
             if (task == null) break;
             deliveries.executeWithoutResult(status -> deliver(task));
@@ -102,16 +100,7 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
             finish(task, "FAILED", "ACCOUNT_UNAVAILABLE", clock.instant());
             return;
         }
-        String token;
-        try {
-            token = cipher.open(task.sealedPayload(), task.recipientId() + ":" + task.template() + ":" + task.tokenGeneration());
-        } catch (IllegalArgumentException ex) {
-            finish(task, "FAILED", "PAYLOAD_INVALID", clock.instant());
-            return;
-        } catch (BusinessException ex) {
-            retry(task, "KEY_UNAVAILABLE");
-            return;
-        }
+        String token = task.deliveryToken();
         if (!token.matches("[A-Za-z0-9_-]{43}")) {
             finish(task, "FAILED", "PAYLOAD_INVALID", clock.instant());
             return;

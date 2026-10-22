@@ -20,20 +20,16 @@ public class KnowledgeAttachmentController {
     public KnowledgeAttachmentController(KnowledgeAttachmentService service) { this.service = service; }
 
     @PostMapping(value = "/api/v1/knowledge-articles/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<?> upload(@PathVariable UUID id, MultipartHttpServletRequest request,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+    public ResponseEntity<?> upload(@PathVariable UUID id, MultipartHttpServletRequest request) {
         if (request.getMultiFileMap().size() != 1 || request.getFiles("file").size() != 1 || !request.getParameterMap().isEmpty())
             throw BusinessException.field("file", "请仅提供一个 file 文件，不提供其他字段");
         return action(request, service.upload(RequestAuthentication.from(request), id,
-            new UploadKnowledgeAttachmentRequest(request.getFile("file")), version, key));
+            new UploadKnowledgeAttachmentRequest(request.getFile("file"))));
     }
 
     @DeleteMapping("/api/v1/knowledge-articles/{id}/attachments/{attachmentId}")
-    public ResponseEntity<?> remove(@PathVariable UUID id, @PathVariable UUID attachmentId,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key, HttpServletRequest request) {
-        return action(request, service.remove(RequestAuthentication.from(request), id, attachmentId, version, key));
+    public ResponseEntity<?> remove(@PathVariable UUID id, @PathVariable UUID attachmentId, HttpServletRequest request) {
+        return action(request, service.remove(RequestAuthentication.from(request), id, attachmentId));
     }
 
     @GetMapping("/api/v1/knowledge-articles/{id}/attachments")
@@ -50,8 +46,8 @@ public class KnowledgeAttachmentController {
     }
 
     private ResponseEntity<?> action(HttpServletRequest request, com.openitsm.vo.ActionVO result) {
-        var response = ResponseEntity.ok().eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, result));
     }
 }

@@ -3,8 +3,8 @@
 面向前端的接口文档。M01～M09 下列契约已接入源码，实际验收边界见 STATUS。M10～M12 仍按设计稿维护；M13 统计接口随 M07 接入，M14 设置已接入。
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
-- 接口前缀：`/api/v1`（健康检查除外）
-- 当前已实现：认证、成员管理、健康检查（M01 后端）、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/附件/操作记录（M04 前后端）、列表详情与检索（M05 前后端）、简单统计（M07/M13）
+- 接口前缀：`/api/v1`
+- 当前已实现：认证、成员管理、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/附件/操作记录（M04 前后端）、列表详情与检索（M05 前后端）、简单统计（M07/M13）
 - M06 已接入账号邮件与工单通知的后台投递；M08、M09、M14 已接入，M10～M12 仍为设计稿，M13 统计已接入。
 
 ## 通用约定
@@ -58,8 +58,6 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | Content-Type: application/json | 有请求正文的接口 | 正文必须是合法 JSON |
 | Origin | 所有写请求 | 见 CSRF 一节 |
 | X-CSRF-Token | 所有写请求 | 见 CSRF 一节 |
-| If-Match | 成员管理、M03 及 M04 回复/备注/附件写操作 | `"<version>"`，如 `"3"`；见乐观版本与幂等键 |
-| Idempotency-Key | 成员管理、M02 创建、M03 及 M04 回复/备注/附件写操作 | UUID；见乐观版本与幂等键 |
 | X-Request-ID | 可选 | UUID；非法值被忽略 |
 
 ### 请求正文
@@ -73,7 +71,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 ### 成功响应
 
-统一结构（健康检查、附件二进制下载与 204 除外）：
+统一结构（附件二进制下载与 204 除外）：
 
 ```json
 {
@@ -119,24 +117,19 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | 403 | FORBIDDEN | 已登录但角色不足 | 提示无权限，不重试 |
 | 404 | RESOURCE_NOT_FOUND | 路径不存在或目标资源不存在 | 提示不存在并返回列表 |
 | 405 | METHOD_NOT_ALLOWED | HTTP 方法与接口不符 | 前端代码缺陷，修正请求方法 |
-| 409 | REQUEST_IN_PROGRESS | 同一幂等键的请求正在处理 | 1 秒后用同一幂等键和同一正文重试 |
 | 413 | REQUEST_TOO_LARGE | 请求正文超过 256 KiB | 前端代码缺陷 |
 | 415 | MEDIA_TYPE_UNSUPPORTED | Content-Type 不是 JSON | 设置 application/json |
 | 429 | RATE_LIMITED | 触发限流 | 按 Retry-After 等待后重试 |
 | 500 | INTERNAL_ERROR | 服务内部错误 | 提示稍后重试，可附 requestId |
-| 503 | DEPENDENCY_UNAVAILABLE | 数据库或邮件配置不可用 | 提示稍后重试；retryable=true |
+| 503 | DEPENDENCY_UNAVAILABLE | 数据库、邮件或 AI 服务不可用 | 提示稍后重试；retryable=true |
 
-### 乐观版本与幂等键
+### 写入与并发
 
-| 项 | 约定 |
-| --- | --- |
-| If-Match 格式 | 引号包裹的十进制数字，如 `"3"` |
-| 版本来源 | 成员列表的 `version` 字段；M03 使用 M05 列表/详情返回的工单 `version` |
-| 缺失 If-Match | 428 PRECONDITION_REQUIRED |
-| 版本不匹配 | 409 VERSION_CONFLICT；重新拉取列表，由用户确认后重新提交 |
-| Idempotency-Key | 每次新操作生成新 UUID；网络失败重试时复用同一 UUID 和同一正文 |
-| 同键不同正文 | 409 IDEMPOTENCY_CONFLICT；换新键重新提交 |
-| 重放成功 | 响应头 `Idempotent-Replayed: true` 且 `data.replayed` 为 true，按成功处理 |
+写请求使用现有会话、Origin 和 CSRF。服务端在事务内锁定相关业务行，校验当前角色、负责人及状态，再更新业务数据和操作记录。重复认领、关闭或发布由当前状态检查处理；相同负责人或业务类型的重复确认直接返回成功。
+
+只有知识正文编辑需要在 JSON 正文提供 version，与读取的文章版本一致；缺失或过期返回 409 VERSION_CONFLICT，保留草稿并刷新后人工确认。其他写操作不要求客户端版本。读取响应中的工单/文章 version 用于页面刷新，设置 version 用于标记连接诊断结果对应的配置。
+
+提交期间禁用重复点击。建单结果不确定时先到“我的工单”核对；其他追加操作先刷新记录，确认结果后再决定是否提交，不自动重放业务写入。
 
 ### 限流
 
@@ -176,7 +169,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 ## 接口
 
-所有模块逐步统一为“接口表 + 参数要点 + 拟修改契约 + 功能链路”，后两项放在模块末尾，明确区分已实现与未实现。所有接口沿用通用约定（认证、CSRF、统一响应结构、全局错误码）；版本与幂等要求以各接口约定为准，新建资源不默认要求 If-Match。
+所有模块逐步统一为“接口表 + 参数要点 + 拟修改契约 + 功能链路”，后两项放在模块末尾，明确区分已实现与未实现。所有接口沿用通用约定（认证、CSRF、统一响应结构、全局错误码）；写入和并发规则见通用约定。
 
 ### M01 认证（本人维护扩展已接入源码，待运行验收）
 
@@ -199,7 +192,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - login：正文 email（去空格转小写，≤254 字符）、password（非空，≤64 码点）、可选 returnTo（站内路径，≤2048 字符）；成功换发会话与新 csrfToken，返回 user（含 id、name、email、role、status、version、lockedUntil）、defaultPath、redirectPath、absoluteExpiresAt、message。邮箱或密码错误、账号锁定（连续错 5 次锁 15 分钟）或已停用统一返回 401 AUTH_INVALID，前端不区分原因。
 - defaultPath 按角色：ADMIN→/dashboard、ENGINEER→/tickets?view=ASSIGNED、EMPLOYEE→/tickets?view=MINE；工单列表已实现，看板接入 M07/M13 统计。
 - returnTo 校验（不通过则回退 defaultPath 并提示）：/knowledge、/tickets、/tickets/new、/tickets?view=MINE 全角色；/tickets?view=ASSIGNED、UNASSIGNED、ALL 非员工；/tickets/{id} 员工限本人工单，其他角色须工单存在；/dashboard、/admin/users、/settings 管理员。
-- me：Body 与 login 成功响应相同（redirectPath 恒等于 defaultPath）；响应头 ETag 与 user.version 一致，用于比对用户信息是否变化；401 时跳登录页并携带 returnTo。
+- me：Body 与 login 成功响应相同（redirectPath 恒等于 defaultPath）；401 时跳登录页并携带 returnTo。
 - activity：无正文，204；每 55～60 秒上报一次；同会话 60 秒内重复返回 429，忽略即可；只刷新无操作计时，不延长 absoluteExpiresAt；收到 401 停止上报并跳登录页。
 - logout：无正文，204；成功后清空本地状态并跳登录页；同一账号其他设备的会话不受影响。
 - password-reset-requests：正文 email；无论邮箱是否存在均返回 202 与统一文案，不得据此推断账号存在；邮件服务未配置返回通用 503。
@@ -216,10 +209,10 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | GET | /api/v1/profile | 读取本人姓名与技能描述 | 全部登录角色 |
 | PATCH | /api/v1/profile | 修改本人姓名与技能描述 | 全部登录角色 |
 
-- password-changes 正文为 oldPassword、password、confirmPassword；只允许当前会话对应的本人，不接收 userId。新密码沿用 12～64 字符、至少字母和数字、二次输入一致的规则；旧密码错误或字段非法返回 400 VALIDATION_FAILED 并定位字段，会话失效仍为 401 SESSION_EXPIRED。使用现有 PasswordEncoder 校验/编码，校验失败不变更密码或会话；成功返回 204、清除当前 Cookie，并使本人全部会话失效。沿用改密对旧重置链接的失效处理；不在日志、审计或幂等记录中保存密码正文。
-- 改密使用会话与 CSRF，不要求 If-Match 或 Idempotency-Key；凭据校验与更新在成员锁内完成，避免与重置密码并发覆盖。成功后旧会话不可重放；响应丢失时先用新密码登录确认，不盲目自动重试原改密。复用现有限流机制，独立按成员 5 次/15 分钟及来源 60 次/分钟，超限沿用 429/Retry-After，不把旧密码输错累计为登录失败。
-- GET profile 返回 data 的 id、name、skillsDescription、version 及 ETag，不返回他人资料。PATCH 至少提供 name 或 skillsDescription，均为字符串：姓名去首尾空白后 1～80 字符，技能描述按纯文本、空串表示清空，整体沿用 256 KiB 正文限制；未知字段及试图变更 email/role/status/userId 均拒绝。需要 If-Match 与 Idempotency-Key，版本沿用成员 version，与管理员修改同一成员并发时返回既有版本冲突。
-- 资料更新沿用 resourceId/acceptedVersion/replayed 与 ETag，更新后前端重新读取本人资料和会话展示；姓名或技能改变不增加 authVersion、不撤销会话。技能仅供 M10 在候选合法的前提下作为补充材料，不向员工开放任意成员详情或原始技能文本读取接口。
+- password-changes 正文为 oldPassword、password、confirmPassword；只允许当前会话对应的本人，不接收 userId。新密码沿用 12～64 字符、至少字母和数字、二次输入一致的规则；旧密码错误或字段非法返回 400 VALIDATION_FAILED 并定位字段，会话失效仍为 401 SESSION_EXPIRED。使用现有 PasswordEncoder 校验/编码，校验失败不变更密码或会话；成功返回 204、清除当前 Cookie，并使本人全部会话失效。沿用改密对旧重置链接的失效处理；不在日志、审计中保存密码正文。
+- 改密使用会话与 CSRF，凭据校验与更新在成员锁内完成，避免与重置密码并发覆盖。成功后旧会话不可重放；响应丢失时先用新密码登录确认，不盲目自动重试原改密。复用现有限流机制，独立按成员 5 次/15 分钟及来源 60 次/分钟，超限沿用 429/Retry-After，不把旧密码输错累计为登录失败。
+- GET profile 返回本人 id、name、skillsDescription、version，不返回他人资料。PATCH 至少提供 name 或 skillsDescription，均为字符串：姓名去首尾空白后 1～80 字符，技能按纯文本、空串清空，整体沿用 256 KiB 限制；未知字段及 email/role/status/userId 均拒绝。事务内锁定本人记录后更新。
+- 资料更新返回 resourceId，前端重读本人资料和会话。姓名或技能改变不撤销会话。技能仅供 M10 对合法候选的推荐参考，不开放员工读取其他成员完整资料的接口。
 
 功能链路：
 
@@ -228,7 +221,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 - 找回密码：填写邮箱 → 统一返回受理提示 → 有效账号按邮件流程获取链接 → 设置新密码 → 校验一次性链接 → 更新密码并使旧会话失效 → 重新登录。
 - 会话与退出：应用加载查询 me → 有效则恢复登录态并按真实操作上报 activity → 失效则返回登录页；主动退出仅结束当前会话。
 - 本人改密：登录 → 打开修改密码入口 → 输入旧密码、新密码和确认密码 → 校验当前会话、CSRF、旧密码及新密码规则 → 同事务更新密码并撤销全部会话 → 返回登录页 → 用新密码登录；校验失败不改密码，响应未知时先登录确认。
-- 本人资料：登录 → 读取本人资料及版本 → 修改姓名或技能描述 → 校验字段、本人身份、版本及幂等 → 保存 → 刷新资料与姓名展示，继续当前会话；冲突后刷新并由用户确认，不覆盖管理员刚修改的资料。
+- 本人资料：登录 → 读取本人资料及版本 → 修改姓名或技能描述 → 校验字段、本人身份、当前成员状态 → 保存 → 刷新资料与姓名展示，继续当前会话；冲突后刷新并由用户确认，仅更新本次提交的资料字段。
 
 ### M01 成员管理（已实现）
 
@@ -246,9 +239,9 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 参数要点：
 
-- 查询：Query page（默认 1，须 ≥1）、q（去空格后 1～100 字符，同时模糊匹配姓名与邮箱，不区分大小写）、role、status；pageSize 固定 20，按更新时间倒序；page 或 status 非法返回 400 INVALID_QUERY。列表项含 version（写操作作 If-Match）与 lockedUntil（仅晚于当前时间时展示解锁入口；2026-10-15 新增，登录与 me 的 user 亦含此字段，不暴露失败次数）。
+- 查询：Query page（默认 1，须 ≥1）、q（去空格后 1～100 字符，同时模糊匹配姓名与邮箱，不区分大小写）、role、status；pageSize 固定 20，按更新时间倒序；page 或 status 非法返回 400 INVALID_QUERY。列表项含 version（供页面刷新）与 lockedUntil（仅晚于当前时间时展示解锁入口；2026-10-15 新增，登录与 me 的 user 亦含此字段，不暴露失败次数）。
 - assignees：返回 ACTIVE 工程师/管理员的 id、name、unresolvedCount、pendingConfirmationCount 与统计时点 asOf，按姓名排序；两个计数查询正式工单表；员工角色不展示分派入口。
-- 写操作均需 Idempotency-Key；修改、停用、解锁、重发另需 If-Match，邀请新成员不要求 If-Match。成功返回 resourceId（目标成员 ID）、acceptedVersion（受理后版本）、replayed（true 表示幂等重放）。
+- 成员写操作返回 resourceId（目标成员 ID）；角色、末位管理员和工单交接规则均由服务端在事务内校验。
 - 邀请：正文 name（去空格后 1～80 字符）、email、role；成功 201，响应头 Location 为 `/api/v1/users?resourceId=<新成员ID>`；邮箱已存在返回 409 EMAIL_EXISTS；新成员状态为 INVITED，须完成激活才能登录。
 - 修改：正文 name、role 至少提供一个，否则 400；修改角色后该成员全部会话立即失效；最后一名在职管理员不能改角色（409 LAST_ADMIN）；工程师或管理员降为员工且有未结束负责单返回 409 MEMBER_HAS_OPEN_TICKETS。
 - 停用：正文 reason 必填（去空格后 5～500 字符，用于审计）；已停用返回 409 INVALID_STATE；最后一名在职管理员不能停用（409 LAST_ADMIN）；停用后该成员会话立即失效，邀请与重置链接全部作废。
@@ -263,24 +256,11 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 
 功能链路：
 
-- 邀请：管理员填写姓名、邮箱、角色 → 提交邀请 → 校验唯一性与幂等 → 创建待激活成员并入队邮件 → 返回受理结果 → 成员打开链接激活；受理不代表邮件送达。
-- 修改或停用：管理员查询成员并取得版本 → 修改资料/角色或填写停用原因 → 校验权限、版本、最后管理员及未结工单保护 → 保存并执行必要的会话失效；冲突刷新后由用户确认重试。
-- 解锁：管理员选择被锁成员 → 携带版本与幂等键提交 → 清除锁定 → 成员重新登录。
-- 重发邀请：管理员选择待激活成员 → 校验版本与状态 → 使旧链接失效并入队新邮件 → 返回受理结果。
+- 邀请：管理员填写姓名、邮箱、角色 → 提交邀请 → 校验邮箱唯一性 → 创建待激活成员并入队邮件 → 返回受理结果 → 成员打开链接激活；受理不代表邮件送达。
+- 修改或停用：管理员查询成员 → 修改资料/角色或填写停用原因 → 事务内校验权限、当前成员状态、最后管理员及未结工单保护 → 保存并执行必要的会话失效；状态冲突刷新后由用户确认。
+- 解锁：管理员选择被锁成员 → 提交操作提交 → 清除锁定 → 成员重新登录。
+- 重发邀请：管理员选择待激活成员 → 校验权限与当前状态 → 使旧链接失效并入队新邮件 → 返回受理结果。
 - 候选读取：具备读取权限的用户请求候选 → 服务端筛选有效工程师和管理员并统计负载 → 展示单选列表；创建或分派时仍须重新校验目标。
-
-### 健康检查（已实现）
-
-| 方法 | 路径 | 用途 | 调用角色 |
-| --- | --- | --- | --- |
-| GET | /health/live | 存活探针，确认后端进程在运行 | 服务器本机 |
-| GET | /health/ready | 就绪探针，确认数据库等依赖可用 | 服务器本机 |
-
-参数要点：
-
-- 不使用统一响应结构，成功 Body 为 `{"status": "UP"}`，直接读取顶层 status 字段。
-- ready 在依赖不可用时返回 503，Body 为 `{"status": "DOWN"}`，不是统一错误结构。
-- 仅允许服务器本机访问，非服务器本机来源返回通用 403 FORBIDDEN。
 
 ### M02 内部提单与统一类型（补齐已接入，待运行验收）
 
@@ -293,18 +273,18 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | DELETE | /api/v1/ticket-types/{id} | 从新提单选项移除 | 创建者工程师、管理员 |
 
 - 创建正文：title、description、impactScope 为非空字符串；businessTypeId 为有效类型 UUID；priority 可选 P1～P4，省略 P3；assigneeId 可选单个 ACTIVE ENGINEER/ADMIN 的 UUID，省略或 null 不指定。提单人取会话，不接受 requesterId/status。正文保持纯文本，总限制 256 KiB。
-- 需 Idempotency-Key，不需 If-Match。成功 201：data 为 id/number/replayed；同键原正文重放返回同一工单并带 Idempotent-Replayed:true，不重复审计和通知。类型、目标资格无效为 400 VALIDATION_FAILED，定位 businessTypeId/assigneeId，整个事务失败。
+- 创建成功 HTTP 201，data 为 id、number。类型或负责人资格无效返回 400 VALIDATION_FAILED，定位 businessTypeId/assigneeId，整个事务回滚。
 - 新建状态始终 NEW、version=0；可选负责人不代表受理，负责人须主动 claim。初次指定同事务保存分派审计及 assignments 通知，排除操作者；自提自接无通知，不指定无新建通知。201 不代表邮件送达。
-- 新请求不再接受自由文本 businessType 创建类型；升级前已成功的四字段请求仍按原摘要重放，类型改名或移除不影响其重放。未知结果保留原内容、版本及键，不以修改正文猜测结果。
-- GET 类型 data.items 默认含 id/name；MANAGE 另含 version/canManage，列表只含有效类型，canManage 不代表新增授权。创建/改名正文 name 为去首尾空白后的非空字符串。创建需键，201 返回 id/name/version/replayed；改名/移除同时需 If-Match/键，200 返回 resourceId/acceptedVersion/replayed 及 ETag。越权 403，不存在或已移除 404，版本/幂等沿用通用错误。
+- 创建只接受统一 businessTypeId，不接受自由文本 businessType。结果未知时保留输入，先到“我的工单”核对编号和内容，再决定是否重新提交。
+- GET 类型 data.items 默认含 id/name/可选 description；MANAGE 另含 version/canManage，仅返回有效类型。创建/改名需非空 name；创建 HTTP 201 返回 id/name，改名/移除 HTTP 200 返回 resourceId。越权 403，不存在或已移除 404。
 - 类型移除保留记录与历史关联；改名后历史展示读取现名。旧工单类型按精确文本去重迁入，creatorId 为空的初始类型仅管理员可管理；没有旧数据不预置类型。
-- 类型列表增加可选 description，纯文本、去首尾空白后最多 500 字。创建和更新正文增加选填 description：创建省略表示无说明，更新省略保留，显式空串清除，null 或非字符串拒绝；更新仍需 name。无说明时列表省略此字段。name-only 旧成功请求保持原幂等摘要和重放结果。
+- 类型列表增加可选 description，纯文本、去首尾空白后最多 500 字。创建和更新正文增加选填 description：创建省略表示无说明，更新省略保留，显式空串清除，null 或非字符串拒绝；更新仍需 name。无说明时列表省略此字段。
 
-功能链路：读取统一类型和候选 → 填写表单、确认可选负责人和优先级 → 创建并显示编号/详情入口 → 逐个复用 M04 上传已选附件。每个文件独立版本及幂等键，工单已成功时只重试未成功附件，不重新建单；未知上传保留原文件/版本/键，明确冲突刷新后由用户确认。文件只在当前页保留。建单前 AI 推荐依赖 M10，本次未接入。
+功能链路：读取统一类型和候选 → 填写表单、确认可选负责人和优先级 → 创建并显示编号/详情入口 → 逐个复用 M04 上传已选附件。每个文件独立请求，工单已成功时只重试未成功附件，不重新建单；未知上传保留原文件，先刷新附件列表核对。文件只在当前页保留。建单前 AI 推荐依赖 M10，本次未接入。
 
 ### M03 工单处理（管理员处理及拒绝已接入，待运行验收）
 
-所有动作使用 POST `/api/v1/tickets/{id}/{action}`，需要 If-Match 与 Idempotency-Key；200 返回 resourceId/acceptedVersion/replayed 和 ETag。权限不足 403、不可见 404、状态不符 409 INVALID_STATE；版本/幂等错误沿用通用约定，成功重放不重复执行或通知。
+所有动作使用 POST `/api/v1/tickets/{id}/{action}`，成功 HTTP 200 返回 resourceId。权限不足 403、不可见 404、状态不符 409 INVALID_STATE。服务端锁定当前工单后校验并变更，同一事务保存必要操作历史和通知任务。
 
 | action | 正文 | 状态与权限 |
 | --- | --- | --- |
@@ -325,7 +305,7 @@ reason/summary 均为去首尾空白后的非空字符串；有正文的接口�
 
 工程师与管理员互转保留归属；降为员工或停用前有 NEW/IN_PROGRESS/ON_HOLD/RESOLVED 负责单则要求先交接，CLOSED/REJECTED 不阻止降级。最后管理员保护和角色变化撤销全部会话继续适用。
 
-功能链路：有权用户读取详情及版本 → 主动确认操作 → 校验角色、负责人、状态及并发版本 → 同事务保存状态/审计/必要通知 → 刷新详情；结果未知重试原请求，冲突刷新后人工确认。
+功能链路：有权用户读取详情 → 主动确认操作 → 事务内校验当前角色、负责人和状态 → 同事务保存状态、业务操作记录及必要通知 → 刷新详情；结果未知先刷新记录核对。
 
 ### M04 回复与附件（前后端已实现）
 
@@ -342,22 +322,21 @@ reason/summary 均为去首尾空白后的非空字符串；有正文的接口�
 参数要点：
 
 - 本阶段细则已由用户确认。两个 POST 正文均为 `{"content":"回复内容"}`，content 必须为字符串，去首尾空白后非空，无额外字段长度限制；沿用 256 KiB JSON 总大小及未知字段拒绝规则。
-- 写请求必须携带 If-Match 和 UUID Idempotency-Key。成功 HTTP 200，data 为 `resourceId`（工单 ID）、`acceptedVersion`（工单新版本）、`replayed`，ETag 为受理版本；回复或备注每次成功均递增工单 version，不改变状态、负责人或轮次起点。
-- 沿用当前用户 + HTTP 方法及完整路径 + key 作用域、原始 DTO 及版本头摘要。同键同正文及原版本重放返回首次结果，带 `Idempotent-Replayed: true`，不重复写回复或审计；即使之后工单已关闭也可重放成功结果。同键异正文/版本返回 409 IDEMPOTENCY_CONFLICT，进行中返回 409 REQUEST_IN_PROGRESS。缺版本为 428 PRECONDITION_REQUIRED，非法版本/键为 400 VALIDATION_FAILED，旧版本为 409 VERSION_CONFLICT。
-- NEW、IN_PROGRESS、ON_HOLD、RESOLVED 均允许追加；CLOSED/REJECTED 返回 409 INVALID_STATE，提示新建工单。公开回复允许提单人、工程师、管理员；工程师、管理员可在全部可见工单追加，不限负责人。员工仅能回复本人提单，不能添加内部备注（403 FORBIDDEN）。回复、工单版本、审计、成功幂等结果同事务提交，回复与关闭通过同一工单行锁串行。
-- 两个 GET 均支持 Query `page`（默认 1，整数且 ≥1），固定 pageSize=20，按 createdAt、id 升序；data 为 `items`、`page`、`pageSize`、`total`。非法 page 为 400 INVALID_QUERY；超出末页返回空 items 与实际 total。GET 不更新工单、审计、幂等或会话活动时间。
+- 回复/备注成功 HTTP 200，data 为 resourceId（工单 ID）；追加记录和工单更新同事务提交，不改变状态、负责人或轮次起点。
+- NEW、IN_PROGRESS、ON_HOLD、RESOLVED 均允许追加；CLOSED/REJECTED 返回 409 INVALID_STATE，提示新建工单。公开回复允许提单人、工程师、管理员；工程师、管理员可在全部可见工单追加，不限负责人。员工仅能回复本人提单，不能添加内部备注（403 FORBIDDEN）。回复、工单版本、审计、业务记录同事务提交，回复与关闭通过同一工单行锁串行。
+- 两个 GET 均支持 Query `page`（默认 1，整数且 ≥1），固定 pageSize=20，按 createdAt、id 升序；data 为 `items`、`page`、`pageSize`、`total`。非法 page 为 400 INVALID_QUERY；超出末页返回空 items 与实际 total。GET 不更新工单、操作记录或会话活动时间。
 - GET replies 合并公开回复与内部备注，每项为 `id`、`content`、`visibility`（PUBLIC/INTERNAL）、`authorId`、`authorName`、`createdAt`。员工只收到 PUBLIC 项，分页和 total 均先过滤；工程师、管理员可读取全部。姓名来自当前成员姓名。
 - GET operations 返回已有 M03 流转及本阶段新增回复/备注动作，每项为 `id`、`action`、`actorId`、`actorName`、`createdAt`、`details`。action 沿用审计编码：TICKET_CLAIM、TICKET_ASSIGNMENTS、TICKET_TRANSFERS、TICKET_SUSPENSIONS、TICKET_RESUME、TICKET_RESOLUTIONS、TICKET_CLOSE、TICKET_REOPEN、TICKET_PRIORITY_CHANGES；新增 TICKET_REPLY、TICKET_INTERNAL_NOTE。不返回成员审计或未知类型审计。
 - 员工 operations 在查询时排除 TICKET_INTERNAL_NOTE。回复/备注的 details 只含 replyId，不复制正文；流转的 details 含 before/after，字段只允许 status、assigneeId、priority、summary（公开解决摘要）、closedAt、cycleStartedAt。仅工程师、管理员在流转 details 中可另读 reason；员工不收到原因、内部审计字段或原始审计载荷。
 - 不存在或员工不可见的工单统一 404 RESOURCE_NOT_FOUND；未登录/失效 401 SESSION_EXPIRED，CSRF 错误 403 CSRF_INVALID，其余沿用通用错误。解决时间及简单统计口径见 M07。
-- 详情页接入回复/操作记录独立分页、公开回复及员工不可选的内部备注。正文按纯文本展示，内部备注明确标识；已关闭单展示限制与新建入口。发表成功刷新详情版本及记录，并显示最新页；结果不确定时保留原正文/路径/版本/幂等键、锁定表单重试，版本或状态冲突保留错误及正文并刷新详情，由用户重新确认。与 M03 写操作互相禁用，避免同页并行提交。
+- 详情页接入回复/操作记录独立分页、公开回复及员工不可选的内部备注。正文按纯文本展示，内部备注明确标识；已关闭单展示限制与新建入口。发表成功刷新详情及记录，并显示最新页；结果不确定时保留正文，先刷新记录核对，确认后再决定是否提交。与 M03 写操作互相禁用，避免同页并行提交。
 - 附件细则已由用户确认。POST attachments 为 multipart/form-data，是 JSON 正文约定的例外；必须且仅提供一个文件 part `file` 和一个文本字段 `visibility`（PUBLIC/INTERNAL），重复/未知字段或多文件返回 400 VALIDATION_FAILED。单文件 1～10485760 字节（10 MiB，含上限），空文件 400、超限 413 REQUEST_TOO_LARGE；请求总大小额外允许 64 KiB 表单开销，其余 JSON 大小规则不变。不限制扩展名，不做预览或执行。
-- 附件上传需要 If-Match、Idempotency-Key，成功 HTTP 200，返回现有工单 `resourceId`、`acceptedVersion`、`replayed` 及 ETag；递增工单 version，不改变状态/负责人/轮次。幂等作用域同回复，请求摘要含原始文件名、SHA-256 内容哈希、visibility 及原版本。同键原文件/名称/可见性/原版本重放不重复写文件，即使之后已关闭也返回首次结果；任一项改变为 409 IDEMPOTENCY_CONFLICT。同键正在处理、版本缺失/非法/冲突沿用回复错误规则。
+- 附件上传成功 HTTP 200，返回 resourceId（工单 ID）；文件元数据、工单更新和操作历史同事务提交，不改变状态、负责人或轮次。仍校验文件大小、可见性和当前工单状态。
 - 上传状态与范围同公开回复；员工仅能给本人提单上传 PUBLIC，INTERNAL 为 403 FORBIDDEN。工程师、管理员可为全部可见工单上传公开或内部附件，不限负责人。CLOSED/REJECTED 禁止上传（409 INVALID_STATE），但保留已有附件下载能力。
 - GET attachments 使用 page（默认1，≥1整数）、固定 pageSize=20、createdAt/id 升序，返回 items/page/pageSize/total；每项为 id、fileName、size（字节）、visibility、uploaderId、uploaderName、createdAt。员工的内部项在查询和计数前排除；不返回路径、哈希或账号凭据。非法 page 为 400 INVALID_QUERY，不存在/不可见工单为 404 RESOURCE_NOT_FOUND。
 - 下载成功 HTTP 200，返回原文件二进制，不使用统一 JSON 成功包装；Content-Type=application/octet-stream，Content-Disposition=attachment（UTF-8 安全原名），Content-Length 为字节数，Cache-Control=no-store、X-Content-Type-Options=nosniff。员工只能下载本人提单的公开附件；内部附件对员工、他人工单附件对员工、不存在附件统一 404 RESOURCE_NOT_FOUND。失效会话 401，存储文件缺失/异常 503 DEPENDENCY_UNAVAILABLE，错误仍用统一 JSON。
 - 上传增加 TICKET_ATTACHMENT / TICKET_INTERNAL_ATTACHMENT 操作，details 只含 attachmentId、fileName、size；员工的内部上传操作在分页/计数前过滤。文件名仅用于安全处理后的下载/展示，物理文件用随机 UUID 保存。成功附件不自动清理；事务回滚清理本次文件，进程异常/提交结果未知的残留保留人工核对，不提供暂存或删除接口。
-- 前端附件区独立分页、按权限选择公开/内部、文件大小校验及鉴权下载；上传保留 File/FormData、可见性、原版本和幂等键以重试，提交中或结果不确定时锁定选择，版本/状态冲突保留文件及错误并刷新详情，等待用户确认。上传与回复/流转互相禁用；关闭后隐藏上传入口，已有可见附件仍可下载。
+- 前端附件区独立分页、按权限选择公开/内部、文件大小校验及鉴权下载；提交中锁定选择，状态冲突保留文件及错误并刷新详情。结果不确定时先核对附件列表，再决定是否重新上传。上传与回复/流转互相禁用；关闭后隐藏上传入口，已有可见附件仍可下载。
 
 补齐契约：
 
@@ -366,9 +345,9 @@ reason/summary 均为去首尾空白后的非空字符串；有正文的接口�
 
 功能链路：
 
-- 沟通：打开可见工单 → 读取回复及操作记录 → 选择公开回复或有权限的内部备注 → 提交文字与版本/幂等键 → 校验身份及可写状态 → 保存并刷新；员工仅能操作本人单的公开内容。
-- 补充原始问题：负责人查看原始描述 → 在公开回复说明补充或纠正信息 → 按回复权限、版本和幂等规则保存 → 原始描述与补充记录共同保留；不覆盖原文、不删除既有沟通。
-- 附件：选择文件与允许的可见性 → 检查大小 → 携版本及独立幂等键上传 → 保存元数据和操作记录 → 按权限列出 → 鉴权下载；结果未知则重试同一上传，明确失败按 M04 规则处理。
+- 沟通：打开可见工单 → 读取回复及操作记录 → 选择公开回复或有权限的内部备注 → 提交文字 → 校验身份及可写状态 → 保存并刷新；员工仅能操作本人单的公开内容。
+- 补充原始问题：负责人查看原始描述 → 在公开回复说明补充或纠正信息 → 按回复权限、事务规则保存 → 原始描述与补充记录共同保留；不覆盖原文、不删除既有沟通。
+- 附件：选择文件与允许的可见性 → 检查大小 → 携业务参数上传 → 保存元数据和操作记录 → 按权限列出 → 鉴权下载；结果未知则先刷新附件列表核对，明确失败按 M04 规则处理。
 - 只读：CLOSED 或 REJECTED → 隐藏写入口并由服务端拒绝新写入 → 仍按权限读取既有记录和下载附件，内部内容仍对员工隐藏。
 
 ### M05 列表与检索（补齐已接入，待运行验收）
@@ -394,12 +373,12 @@ reason/summary 均为去首尾空白后的非空字符串；有正文的接口�
 邀请、重发邀请、重置申请继续调用 M01 既有接口写入任务；工单通知由既有 M03/M04 写接口在同一事务内入队，不新增通知查询、投递或重试接口，不改变工单请求/响应字段。后台在显式启用且配置就绪后投递和重试，接口成功不等于收件箱已收到。
 
 - `assignments`、`transfers` 通知提单人及操作后的新负责人；公开 `replies`、`resolutions`、`close`、`reopen` 通知提单人及操作后的当前负责人。收件人去重、排除操作者，入队时仅保留 ACTIVE 且可见的成员；发送前再校验账号状态和工单可见性。负责人为空时只处理提单人候选。
-- 当前新建、claim、suspensions、resume、priority-changes、内部备注、附件不通知。创建时指定负责人的例外：M02 创建时指定负责人按 assignments 通知，排除提单人后仅通知新负责人，自提自接不入队；无负责人创建仍不通知。业务校验失败、版本冲突、事务回滚不入队；成功幂等重放不重复入队。任务入队失败沿用统一 503，并回滚业务、审计及成功幂等记录，不返回虚假的成功结果。
+- 当前新建、claim、suspensions、resume、priority-changes、内部备注、附件不通知。创建时指定负责人的例外：M02 创建时指定负责人按 assignments 通知，排除提单人后仅通知新负责人，自提自接不入队；无负责人创建仍不通知。业务校验失败、版本冲突、事务回滚不入队；成功重复状态变更不重复入队。任务入队失败沿用统一 503，并回滚业务、审计及操作记录，不返回虚假的成功结果。
 - 中文纯文本工单邮件只含编号、动作、`/tickets/{id}` 登录鉴权详情链接；不含标题、描述、回复正文、原因、内部备注、附件或账号令牌。
 - 复用 notification_task、领取锁、120 秒租约、4 次尝试及 60/300/900 秒退避；发送前无权访问的任务结束为 FAILED，最后一次崩溃后租约耗尽为 TIMEOUT。SMTP 接受后回写失败可能重复发送，不保证恰好一次。
-- `OPENITSM_ACCOUNT_MAIL_ENABLED` 为既有邮件投递总开关；工单通知另需显式开启 `OPENITSM_TICKET_MAIL_ENABLED`（默认 false）。关闭时工单任务仍随业务入队，但不领取、不耗费尝试；启用前应核对积压任务及收件人。配置说明见 source/backend/README.md。
+- 邮件按业务入队后由后台调度投递，SMTP 使用 Spring Mail 或已保存的 M14 连接；未配置或投递失败保留任务并按既定规则重试。
 
-M14 的 GET/PATCH /api/v1/settings 及管理员设置页已接入数据库 SMTP 配置；保存不改变部署投递开关，不发送测试邮件，详见 M14。
+M14 的 GET/PATCH /api/v1/settings 及管理员设置页已接入数据库 SMTP 配置；保存后用于后续业务投递，不发送测试邮件，详见 M14。
 
 补齐契约：
 
@@ -440,7 +419,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 - 列表参数 `view=PUBLISHED`（默认，全角色，仅已发布）、`MINE`（仅工程师，本人全部状态）、`ALL`（仅管理员，全部知识）；`q` 去除首尾空白后为 1～100 个 Unicode 字符，标题或正文不区分大小写的字面子串匹配；`category` 为非空分类精确匹配；`page` 为正整数，默认 1，固定每页 20 条，按 `updatedAt`、`id` 倒序。
 - 列表 `data` 为 `{items,page,pageSize,total}`；列表项和详情均含 `id,title,content,category,status,authorId,authorName,version,createdAt,updatedAt,publishedAt`。草稿的 `publishedAt` 为 null，发布时记录本次发布时间。
 - 草稿详情仅原作者工程师及管理员可读；员工（包括已降级的原作者）或其他工程师访问草稿返回 404。下架内容从默认检索中消失，仍可在获授权的 MINE/ALL 中查看。
-- 写入沿用全局幂等、版本及 Cookie/CSRF 规则：创建带 `Idempotency-Key`，编辑/发布/下架另带 `If-Match`；发布/下架无正文。创建 201，其余 200，`data` 为 `{resourceId,acceptedVersion,replayed}`，附 ETag；重放返回原版本，不重复执行。版本冲突 409 `VERSION_CONFLICT`，状态不允许 409 `INVALID_STATE`，无角色权限 403，非法查询 400 `INVALID_QUERY`。读取无写入或会话续期副作用。
+- 知识写入使用会话与 CSRF。创建 HTTP 201，其余 HTTP 200，data 为 {resourceId}。编辑正文在 JSON 提供读取时的 version；发布/下架无正文，按当前状态处理。正文、附件和发布操作锁定同一文章；状态不符 409 INVALID_STATE，正文过期 409 VERSION_CONFLICT，越权 403，非法查询 400 INVALID_QUERY。读取不写入或续期。
 
 补齐契约：
 
@@ -457,23 +436,26 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 | DELETE | /api/v1/knowledge-articles/{id}/attachments/{attachmentId} | 草稿中逻辑移除附件 | 原作者工程师，仅本人 DRAFT |
 
 - 上传仅接受 multipart 的单个 file 字段，不接受 visibility；大小 1～104857600 字节（100 MiB，含上限），空文件或格式非法 400 VALIDATION_FAILED、超限 413 REQUEST_TOO_LARGE。不限制扩展名，不提供预览或执行；工单附件仍限制 10 MiB，不能因放宽知识上传而一并放开。
-- 上传与移除均需文章 If-Match、Idempotency-Key；成功返回既有 resourceId（文章 ID）、acceptedVersion、replayed 和 ETag，递增文章 version、updatedAt，不自动发布。上传摘要包括原文件名/内容 SHA-256/文章原版本，移除摘要包括附件 ID/原版本。正文、附件变更和发布均锁同一文章，防止并发发布遗漏或夹带未经确认的附件。
+- 知识附件上传/逻辑移除成功返回 resourceId（文章 ID），递增文章 version、updatedAt，不自动发布。与正文、发布/下架通过文章行锁协调；重复移除同一附件直接成功，物理文件保留。
 - 已发布文章禁止附件变更，409 INVALID_STATE；管理员可下架并读取草稿附件，但无作者工程师资格时不允许上传或移除。不可见文章、附件不存在、归属不匹配或已移除附件统一 404；对可见草稿无编辑权的写入为 403。列表仅返回未移除项，按 createdAt/id 升序、固定每页 20，包含 id/fileName/size/uploaderId/uploaderName/createdAt，不返回存储路径或哈希。
 - 发布后任何登录角色可按文章权限列出和下载；下架后立即回到作者工程师/管理员可读范围。下载沿用 M04 的 application/octet-stream、安全 Content-Disposition、no-store/nosniff 和二进制响应，不沿用工单的权限条件。草稿移除仅记录 removedAt/removedBy，保留文件和历史元数据，后续普通列表/下载不返回已移除项；不新增恢复、物理删除或历史文件下载入口。
-- 写入幂等重放先返回首次成功结果，不重复存储或移除；未知结果保留文件、原版本与键重试。后续文章已发布或附件已移除时，原成功请求仍可按授权重放，不能借重放新增写入。新请求必须重新校验状态；版本冲突由用户刷新确认。新文件失败补偿沿用既有回滚清理，不清理已成功或逻辑移除文件。
+- 附件上传与移除在文章锁内检查作者及草稿状态；重复移除已移除附件直接成功。上传结果未知时先刷新附件列表核对，再决定是否重新上传。新文件失败补偿沿用既有回滚清理，不清理已成功或逻辑移除文件。
 
 功能链路：
 
 - 创作：工程师创建本人草稿 → 填写纯文本标题、正文、分类 → 保存并取得版本 → 管理员检查后发布 → 全角色按关键词和分类检索并阅读。
 - 修订：管理员下架 → 文章回到 DRAFT，员工不再可读 → 原作者工程师修改并保存 → 管理员重新发布 → 展示最新已发布内容；版本冲突先刷新并由用户确认。
-- 附件上传（已接入，待运行验收）：作者工程师打开本人草稿 → 选择不超过 100 MiB 的文件 → 校验并携文章版本/独立幂等键上传 → 保存附件并更新文章版本 → 管理员检查文章及附件后发布 → 全角色按文章权限下载。
+- 附件上传（已接入，待运行验收）：作者工程师打开本人草稿 → 选择不超过 100 MiB 的文件 → 校验并携文章业务参数上传 → 保存附件并更新文章版本 → 管理员检查文章及附件后发布 → 全角色按文章权限下载。
 - 附件修订（已接入，待运行验收）：已发布文章 → 管理员下架 → 仅作者工程师/管理员可读 → 作者工程师上传或逻辑移除 → 保存更新版本 → 管理员重新发布；被移除文件保留存储但不再可下载。
 - 附件失败重试（已接入，待运行验收）：上传失败或未知 → 保留 File、文章原版本和键 → 按原请求确认结果 → 明确冲突时刷新并由用户确认 → 成功后才进入发布流程，不把本地待上传文件列为已发布附件。
 
-### M09 AI 业务类型建议（详情页已接入）
+### M09 AI 业务类型建议（提单页与详情页已接入）
+
+当前接口覆盖提单前建议、详情页建议与人工确认；共用已有类型和模型计算逻辑。
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
+| POST | /api/v1/ai/classification-suggestions | 提单前生成类型及优先级建议 | 全部已登录有效成员 |
 | POST | /api/v1/tickets/{id}/ai/classification-suggestions | 生成已有业务类型及优先级建议 | 同下述类型确认角色/状态范围 |
 | POST | /api/v1/tickets/{id}/classifications | 人工确认业务类型，不写优先级 | NEW 提单人/负责人/管理员；处理中或挂起的负责人/管理员 |
 
@@ -485,14 +467,16 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 
 已实现契约：
 
+- 提单前建议正文仅 title（去首尾空白后 1～1000 字符）、description（1～60000 字符）、impactScope（可省略或空字符串，最长 4000 字符）；显式 null 或非字符串非法。不接受 businessTypeId、自定义候选或其他字段。复用会话及 CSRF，不需要临时工单、版本头或幂等 Key。响应沿用下述三字段；无可用类型返回三个 null。仅记录已有 AI 调用状态，不创建工单、操作记录、附件或邮件任务。
+- 创建页建议独立加载和报错；点击“采用此类型”才填入类型，不修改初始优先级。标题、描述、影响范围或手选类型变化后旧建议及在途结果失效；提交成功或离开页面后忽略迟到结果。AI 等待或失败不阻止人工提单。正式建单仍由 M02 校验全部必填字段和类型有效性；失效类型刷新选项并要求重新选择，不自动替换。
 - 已确认取消标签及独立分类字段；M09 复用 M02 业务类型选项，管理权限不因 AI 请求扩大。NEW 限提单人、当前负责人或管理员，IN_PROGRESS/ON_HOLD 限当前负责人或管理员；RESOLVED/CLOSED/REJECTED 禁止类型写入及本入口建议请求。操作角色和目标状态在服务端检查，不仅隐藏按钮。
-- classifications 正文仅 businessTypeId（必填 UUID），需 If-Match/Idempotency-Key；同事务更新类型、version、TICKET_CLASSIFICATIONS 审计及成功幂等记录，状态、负责人、优先级不变且不触发邮件。成功 200，返回现有 resourceId/acceptedVersion/replayed 与 ETag；不可见 404、无权限 403、状态不允许 409、版本/幂等冲突沿用通用规则，类型不存在/不可用或字段非法 400。类型提交前失效则整次失败，不静默改为其他类型；原成功请求重放不重复写入。
-- classification-suggestions 不接受客户端工单正文或自定义类型集合，由 Java 按路径工单取公开问题字段与可用类型；本接口不写业务字段，不要求 If-Match。建议响应含 businessTypeId、reason、suggestedPriority，前两者可为空表示无可用建议，优先级建议仅 P1～P4 或 null；前端明确“建议尚未生效”。AI 重试与错误遵循 M14 共用约定，本版无每日次数额度，不用 suggestions 接口代替类型管理。
-- AI 输入仅使用经授权的工单公开问题信息及可用类型选项，不读内部备注或任何附件。输出候选类型与简短依据、可选优先级建议；Java 过滤非法/失效类型、拒绝非预期字段，建议不更新工单或版本。
+- classifications 正文仅 businessTypeId（必填 UUID），事务内检查权限、状态及类型有效性，更新类型和业务操作记录，不改变负责人、优先级或状态，不触发邮件。成功 HTTP 200 返回 resourceId；相同类型重复确认直接成功且不新增记录。类型失效或字段非法 400、不可见 404、无权限 403、状态不允许 409。
+- classification-suggestions 不接受客户端工单正文或自定义类型集合，由 Java 按路径工单取公开问题字段与可用类型；本接口不写业务字段，建议响应含 businessTypeId、reason、suggestedPriority，前两者可为空表示无可用建议，优先级建议仅 P1～P4 或 null；前端明确“建议尚未生效”。AI 重试与错误遵循 M14 共用约定，本版无每日次数额度，不用 suggestions 接口代替类型管理。
+- AI 输入仅使用经授权的工单公开问题信息及可用类型选项，不读内部备注或任何附件。输出候选类型与简短依据、可选优先级建议；Python 校验 JSON 结构、候选枚举及字段关系，Java 反序列化并复核当前业务权限、状态、配置和类型有效性，建议不更新工单或版本。
 
-功能链路（尚未实现）：
+功能链路（详情页已实现）：
 
-- 建单后打开有权操作的工单 → 手动生成类型/优先级建议 → Java 校验可见性并提供可用类型 → Python 计算 → Java 校验输出 → 人工确认已有类型 → 版本/权限/目标有效性校验后保存；优先级单独由管理员填写原因经 M03 调整。
+- 建单后打开有权操作的工单 → 手动生成类型/优先级建议 → Java 校验可见性并提供可用类型和当前模型连接 → Python 计算并校验输出 → Java 复核当前业务有效性 → 人工确认已有类型 → 版本/权限/目标有效性校验后保存；优先级单独由管理员填写原因经 M03 调整。
 - AI 不可用 → 显示说明并保留当前工单 → 有权限者仍可人工选择业务类型 → 同样通过分类确认校验，不自动创建标签或类型。
 - 状态或角色变化：页面生成建议后工单已被受理、解决或负责人变化 → 提交时重新检查权限、状态和版本 → 不满足则拒绝并刷新，建议不会自动覆盖新数据。
 
@@ -519,7 +503,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 功能链路（均尚未实现）：
 
 - 创建前：全角色填写表单 → 手动请求推荐 → Java 校验并提供授权候选 → Python 返回建议 → Java 过滤候选与可展示理由 → 提单人确认 → M02 创建时校验并指定。
-- 创建后：工程师或管理员打开可见工单 → 请求推荐 → 查看候选与理由 → 有权操作者按 M03 分派或转派 → 校验版本及目标 → 生效；无操作权限仅能查看建议。
+- 创建后：工程师或管理员打开可见工单 → 请求推荐 → 查看候选与理由 → 有权操作者按 M03 分派或转派 → 校验当前状态及目标 → 生效；无操作权限仅能查看建议。
 - 降级：无候选、AI 关闭或失败 → 显示说明 → 保留当前表单或工单 → 人工选择或按允许的流程不指定提交，不自动选择替代人。
 
 ### M11 相似问题检索（未实现）
@@ -535,7 +519,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 
 拟修改契约：
 
-- 请求使用路径中的当前工单，由 Java 验证工程师/管理员及工单可见性，读取标题、原始描述、业务类型等公开问题字段；不接受浏览器自定全库语料或他人工单正文。接口只检索，不改变状态、负责人、版本，不要求 If-Match。
+- 请求使用路径中的当前工单，由 Java 验证工程师/管理员及工单可见性，读取标题、原始描述、业务类型等公开问题字段；不接受浏览器自定全库语料或他人工单正文。接口只检索，不改变状态、负责人、版本，
 - 候选来源仅当前 RESOLVED/CLOSED 工单的可见标题、原始描述和公开解决摘要，以及当前 PUBLISHED 知识的标题和正文；排除当前工单、REJECTED、未解决单、知识草稿、内部备注及所有附件。Java 从数据库查询授权候选，再由 Python 计算相关性，不把全库交给模型自行查。
 - 拟返回 data.items，0～5 项，含 sourceType（TICKET/KNOWLEDGE）、sourceId、number（仅工单）、title、excerpt、reason；标识必须来自真实候选，链接由前端按来源类型和 ID 构造，不采纳模型伪造的链接或来源。结果去重，返回前再次复核来源状态和可见性，已下架或失去资格的来源剔除，不为凑足 5 条补造结果。
 - 无匹配返回 200 和空 items；AI 关闭或计算失败显示不可用并允许使用 M05/M08 的人工关键词检索，不把依赖失败伪装为空结果或成功检索。具体 AI 错误和主动重试遵循 M14 共用约定，本版无每日次数额度；依赖故障不修改当前工单。
@@ -560,8 +544,8 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 拟修改契约（已确认方向，尚未实现）：
 
 - 工程师/管理员可对可见 NEW/IN_PROGRESS/ON_HOLD/RESOLVED 生成草稿，不要求本人负责；CLOSED/REJECTED 返回 409 INVALID_STATE，非处理角色 403，工单不存在/不可见 404。请求由 Java 读取路径工单和 M11 授权候选，不接受客户端注入他人工单正文、系统提示或候选来源。
-- 生成不要求 If-Match，不写工单、回复、审计或版本，不触发通知；拟返回 data 的 content、sources（sourceType/sourceId/number/title）及 basedOnVersion。sources 只允许真实授权来源，最多沿用 M11 的 5 项，不包含内部备注或任何附件；Java 返回前再次验证工单状态和来源可见性，必要时拒绝过时生成结果。
-- 草稿仅当前页面，服务端不保存业务草稿箱或增加草稿查询/恢复接口。用户编辑后经 M04 replies 发送，使用发送时最新版本和独立 Idempotency-Key；不得把“生成草稿”视为已经回复或首次人工响应。生成期间工单变化则提示重新核对，不能自动拿新版本覆盖提交。
+- 生成不写工单、回复、审计或版本，不触发通知；拟返回 data 的 content、sources（sourceType/sourceId/number/title）及 basedOnVersion。sources 只允许真实授权来源，最多沿用 M11 的 5 项，不包含内部备注或任何附件；Java 返回前再次验证工单状态和来源可见性，必要时拒绝过时生成结果。
+- 草稿仅当前页面，服务端不保存业务草稿箱或增加草稿查询/恢复接口。用户编辑后经 M04 replies 发送，使用会话与 CSRF；不得把“生成草稿”视为已经回复或首次人工响应。生成期间工单变化则提示重新核对，不能自动拿新版本覆盖提交。
 - AI 关闭/超时/失败明确提示并保留人工回复入口，不发空草稿冒充成功。已确认无相似来源时可基于当前问题生成补充信息询问或一般建议，sources=[] 并明确标注“无参考来源”，不编造引用、历史案例或已验证结论；拟返回 hasReferenceSources=false 供页面明确展示，有来源时为 true。重新点击生成属于新的 AI 请求，不保证原结果重放，页面需避免自动重试导致重复调用。
 
 功能链路（尚未实现）：
@@ -610,30 +594,30 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 | POST | /api/v1/settings/model-connection-tests | 使用已保存连接发送固定测试文本 | 管理员，AI 关闭时也允许 |
 
 - GET settings 返回 id/version、teamName、smtp（host/port/username/from/security/passwordConfigured）、model（baseUrl/model/apiKeyConfigured）、aiEnabled 及 lastTest/lastCall 只读状态。SMTP 密码和模型密钥不回显，不把掩码字符串当作可回传凭据；后台状态不得包含原始密钥、工单正文、完整供应商请求或错误堆栈。
-- PATCH 接受 teamName、smtp、model、aiEnabled 的局部更新，至少一项，需 If-Match/Idempotency-Key；管理员权限与版本重验后事务内保存，200 返回既有 resourceId/acceptedVersion/replayed 与 ETag。teamName 提供时须为非空字符串；端口为 1～65535，连接地址/安全模式与服务器连接要求校验，非法字段为 400 VALIDATION_FAILED。清除凭据后不具备模型连接条件时不得保持 AI 启用；未配置完整连接时开启返回 409 INVALID_STATE，不静默发送外部请求。
-- 凭据字段省略表示保留，非空值表示替换；smtp.clearPassword/model.clearApiKey=true 才表示显式清除。清除与同时提供新值互斥，空串或 null 不作为清除命令，避免掩码或空表单误覆盖。凭据加密后保存数据库，运行按配置版本使用；页面不改 .env，数据库未保存前可使用部署引导配置。首次局部保存以当前有效配置为基线保留省略项，已有数据库配置优先，显式清除后不回退旧环境密钥。
-- 保存设置只保存和校验，不自动测试、发送邮件或开启 AI；AI 开关必须由管理员显式选择。SMTP 参数接入现有投递器，已有投递开关和收件权限保护继续适用，不因界面保存连接而自动启动积压投递。模型只配置一个连接，不支持页面填写脚本或浏览器直接调用 Python。
+- PATCH 接受 teamName、smtp、model、aiEnabled 的局部更新，至少一项；管理员权限校验后在事务内串行保存，未提供字段保留，HTTP 200 返回 resourceId。teamName 非空、端口 1～65535，地址/安全模式和未知字段由服务端校验。模型连接不完整时不得保持或开启 AI，返回 409 INVALID_STATE。保存不触发模型请求。
+- 凭据字段省略表示保留，非空值表示替换；smtp.clearPassword/model.clearApiKey=true 才表示显式清除。清除与同时提供新值互斥，空串或 null 不作为清除命令，避免掩码或空表单误覆盖。凭据保存到受访问权限保护的数据库，运行按配置版本使用；页面不改 .env，数据库未保存前可使用部署引导配置。首次局部保存以当前有效配置为基线保留省略项，已有数据库配置优先，显式清除后不回退旧环境密钥。
+- 保存设置不发送测试邮件、不自动测试模型或开启 AI；保存后的邮件连接供后台业务投递使用；AI 开关必须由管理员显式选择。SMTP 参数接入现有投递器，收件权限保护继续适用，后台按有效连接处理待投递任务。模型只配置一个连接，不支持页面填写脚本或浏览器直接调用 Python。
 - model-connection-tests 不接受业务正文或任意提示，只测试当前已保存的连接，返回测试状态及 testedVersion；配置缺失返回明确错误，失败不改变连接或启用状态。对同一管理员限制每 1 秒一次，超限 429 RATE_LIMITED/Retry-After；只记录脱敏结果，配置已变化时旧测试结果不作为新配置可用的证据。
 - 本版不设每日次数、个人或团队额度，不增加额度扣减/预占表或“额度耗尽”错误。读取只显示启用、已配置及最近调用/测试状态；连接未测试或无调用时明确“未测试/暂无调用”，不能显示虚假的成功。
 
 M09～M12 共用调用约定（业务入口随对应模块接入）：
 
-- 纯计算建议/检索/草稿请求使用既有会话、Origin 和 CSRF，不要求 If-Match 或业务 Idempotency-Key；不写工单版本。人工应用业务类型、分派、回复仍各自带版本与幂等键。页面提交中禁止重复点击，失败由用户主动重试，不自动重试外部生成；重新生成是新计算，不承诺恢复原草稿或原建议。
-- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，当前配置能力未验证 503 AI_CAPABILITY_NOT_VERIFIED、不支持结构化输出 503 AI_STRUCTURED_OUTPUT_UNSUPPORTED、材料超限 503 AI_REQUEST_TOO_LARGE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。M09 已接入配置与权限重验；M10～M12 业务接口尚未实现，不将错误伪装成空结果。
+- 纯计算建议/检索/草稿请求使用既有会话、Origin 和 CSRF，不写工单版本。人工应用业务类型、分派、回复仍各自带业务参数。页面提交中禁止重复点击，失败由用户主动重试，不自动重试外部生成；重新生成是新计算，不承诺恢复原草稿或原建议。
+- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，材料超限 503 AI_REQUEST_TOO_LARGE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。供应商认证、限流及请求拒绝按下文独立错误码返回。M09 已接入配置与权限重验；M10～M12 业务接口尚未实现，不将错误伪装成空结果。
 - Java 和 Python 设置有限连接/读写/总等待并及时取消，具体传输值在部署接入时校验；只回传可公开的错误说明，不回显密钥或原始供应商异常。AI 关闭阻止后续业务调用，已在途结果返回前重验开关/权限，关闭后不自动应用结果；管理员连接测试是独立例外。
 
 功能链路：
 
-- 配置：管理员读取设置和版本 → 修改团队/SMTP/模型参数，按需替换或显式清除凭据 → 校验权限、版本及配置完整性 → 加密保存 → 返回受理版本 → 后续服务按保存配置运行，页面只显示凭据已配置状态。
+- 配置：管理员读取设置和版本 → 修改团队/SMTP/模型参数，按需替换或显式清除凭据 → 校验权限及配置完整性 → 事务内保存 → 返回资源 ID → 后续服务按保存配置运行，页面只显示凭据已配置状态。
 - 测试：管理员保存模型连接 → 主动测试（AI 可关闭） → 发送固定测试文本 → 脱敏展示对应配置版本的结果 → 管理员决定是否开启，不自动切换开关或保存别的表单修改。
 - 开关与人工降级：管理员关闭 AI → 新业务 AI 请求明确不可用 → M02/M03/M04/M05/M08 人工流程继续；管理员开启前须配置完整连接，无调用记录时显示暂无调用。
 
 具体字段与边界：
 
-- 未保存时 id 固定为 00000000-0000-0000-0000-000000000014、version=0，AI 默认关闭；首次成功 PATCH 返回 version=1。GET 不写库、不续期会话、不连接外部服务。teamName 为 1～80 字符；smtp.host ≤253、username/from ≤320、port 为整数；security 为 SSL/STARTTLS/NONE，NONE 仅 local/test 的 loopback 可用。允许保存尚未完整的连接，但不能启用不完整的 AI。
+- 未保存时 id 固定为 00000000-0000-0000-0000-000000000014、version=0，AI 默认关闭；PATCH 返回 resourceId，保存后重新 GET 取得递增的配置版本。GET 不写库、不续期会话、不连接外部服务。teamName 为 1～80 字符；smtp.host ≤253、username/from ≤320、port 为整数；security 为 SSL/STARTTLS/NONE，NONE 仅 local/test 的 loopback 可用。允许保存尚未完整的连接，但不能启用不完整的 AI。
 - model.baseUrl ≤2048、model.model ≤200，地址禁止 userinfo/query/fragment，要求 HTTPS；local/test 允许 loopback HTTP。模型采用兼容 Chat Completions 的连接，baseUrl 包含 API 前缀（如 /v1），Python 追加 /chat/completions。密码和密钥最多 512 字符，拒绝纯掩码、空串、null、控制字符；省略保留，显式 clear 为 true 时落库空值且不回退部署凭据。其余字符串字段可留空表示未配置；未知字段、空对象及错误类型拒绝。
-- lastTest/lastCall 为 {status,testedVersion,occurredAt,current,outputMode}；没有记录分别为 NOT_TESTED/NO_CALLS，版本和时间为 null。测试开始记录 RUNNING，完成为 SUCCESS 或公开错误码；异常退出后超过 20 秒的 RUNNING 读取为 AI_TIMEOUT，配置变更后 current=false。业务 AI 尚未接入时 lastCall 保持 NO_CALLS。
-- POST model-connection-tests 接受空正文或 {}，拒绝任何自定义字段；仅测试数据库已保存且完整的连接。成功 data 为 {status:"SUCCESS",testedVersion,occurredAt,current,outputMode}；调用失败使用统一错误包装，同时保留对应版本的脱敏测试状态，限频在失败后仍有效。连接缺失返回 503 AI_NOT_CONFIGURED；内部认证缺失/供应商失败返回 503 DEPENDENCY_UNAVAILABLE；非法输出返回 503 AI_INVALID_RESPONSE；超时返回 504 AI_TIMEOUT。
+- lastTest/lastCall 为 {status,testedVersion,occurredAt,current}；没有记录分别为 NOT_TESTED/NO_CALLS，版本和时间为 null。测试开始记录 RUNNING，完成为 SUCCESS 或公开错误码；异常退出后超过 20 秒的 RUNNING 读取为 AI_TIMEOUT，配置变更后 current=false。业务 AI 尚未接入时 lastCall 保持 NO_CALLS。
+- POST model-connection-tests 接受空正文或 {}，拒绝任何自定义字段；仅测试数据库已保存且完整的连接。成功 data 为 {status:"SUCCESS",testedVersion,occurredAt,current}；调用失败使用统一错误包装，同时保留对应版本的脱敏测试状态，限频在失败后仍有效。连接缺失返回 503 AI_NOT_CONFIGURED；内部服务不可达或供应商失败返回 503 DEPENDENCY_UNAVAILABLE；非法输出返回 503 AI_INVALID_RESPONSE；超时返回 504 AI_TIMEOUT。
 - Python 模型请求连接/读/写/连接池超时分别为 2/5/3/2 秒，总等待 10 秒；Java → Python 连接 2 秒、请求 15 秒、含响应体总等待 16 秒，超限主动取消。两端禁止重定向；Python 响应体最多 64 KiB，Java 内部响应最多 16 KiB；无自动外部生成重试。浏览器仍使用既有 Cookie/Origin/CSRF。
 
 ## 内部接口（Java → Python，M09～M12 及 M14 模型测试）
@@ -650,13 +634,13 @@ M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 Python 侧只做 AI 计算，不访问数据库；输入材料（授权公开问题、合法处理人及汇总经验/负载/技能、授权检索语料）由 Java 组装后传入。模型连接凭据只供服务端传输客户端认证，不作为提示词材料，不提供 SMTP 或账号凭据，不写日志或响应；测试只走固定文本的独立内部入口，不借业务提示注入。内部调用需限制为服务端访问并校验调用方，M09 输出由 Python 按动态 Pydantic 类型校验结构、候选枚举及字段关系，Java 仅反序列化并复核当前业务权限、状态、配置版本及类型当前有效性；不在 Java 重复手写输出 Schema 校验。其他 AI 模块仍按各自契约接入。
 
-M14 内部测试正文为 {modelConnection:{baseUrl,model,apiKey}}，没有工单材料或 SMTP 字段；成功仅返回 {status:"SUCCESS",outputMode:"JSON_SCHEMA"|"TOOL_CALL"}，失败返回 {code}。Java 与 Python 使用部署端相同的内部 Bearer token（至少 32 字符），与浏览器会话无关。Python 默认仅监听 loopback、关闭文档与 CORS；不携带正确内部认证的请求在解析正文前拒绝，验证错误不返回输入值。生产须配置服务端网络隔离及 TLS；密钥只用于模型客户端 Authorization，不出现在固定测试文本、响应或日志。
+M14 内部测试正文为 {modelConnection:{baseUrl,model,apiKey}}，不含工单或 SMTP 字段；成功返回 {status:"SUCCESS"}，失败返回 {code}。Java 仅调用同机 loopback 地址，Python 以 `python -m app` 固定监听 127.0.0.1:8001、忽略代理头，并在解析正文前拒绝非本机客户端。关闭文档和 CORS；模型 API 凭据仅用于供应商 Authorization，不进入提示词、响应或日志。
 
-M09 结构化输出与能力验证：
+M09 直接生成与结果校验：
 
-- 管理员连接测试最多发送两个固定无业务数据探针，共用 10 秒总等待；先用 response_format.json_schema（strict=true），仅供应商明确拒绝该参数/能力时再试强制函数工具调用（strict=true、固定 tool_choice、禁止并行）。鉴权、限流、超时、网络故障、一般参数或 Schema 错误、200 非法输出都不触发备用协议。两种协议均明确不支持时返回 AI_STRUCTURED_OUTPUT_UNSUPPORTED。测试通过仅证明该样本可用，业务输出仍逐次校验。
-- V16 为最近测试结果增加 outputMode，仅成功测试可记录 JSON_SCHEMA/TOOL_CALL；旧结果模式为 null，升级不伪造已验证。模式与 testedVersion、attempt_id 绑定，配置任何保存后须重测，旧在途测试不能覆盖新测试。GET 的 lastCall.outputMode 为 null；lastTest 为历史测试模式，current=false 时不得视为当前能力。
-- 详情页建议在有候选时要求当前配置有成功能力验证；否则 AI_CAPABILITY_NOT_VERIFIED，提示管理员测试。无候选直接返回三字段 null，不调用模型。请求仅按已验证模式执行一次，不在业务流程探测/自动重新生成。人工确认不依赖 AI 能力。
-- 内部 classification-suggestions 正文为 {modelConnection,ticket:{title,description,impactScope},businessTypes:[{id,name,description?}],outputMode}。Python 用同一 Pydantic 输出类型生成三字段必填、additionalProperties=false 的 Schema，businessTypeId 为本次有效 UUID ID 枚举或 null，reason 为最多 200 字说明或 null，suggestedPriority 为 P1～P4 或 null。ID 和 reason 必须成对为 null 或成对有效，理由非空且无控制字符；不猜测补齐字段。
-- 每次检查 finish_reason、拒答及唯一指定工具调用，拒绝截断、错误工具/多工具、额外字段、重复键、非法候选/优先级及理由关系；仅校验通过对象可离开 Python。Java 保留传输认证、大小/超时与 VO 解析和当前业务有效性检查，人工提交仍事务内校验。
-- Java→Python 正文最多 128 KiB；Python 序列化完整模型请求（含候选及 Schema）最多 256 KiB，超限明确拒绝、不截断候选；输出预算 1024 tokens，模型响应仍最多 64 KiB，Java 内部响应最多 16 KiB。失败诊断只含固定类别，不持久化原始输出、工单材料、提示词或凭据。
+- 建议生成只要求 AI 开启、模型配置完整及当前用户/工单具备业务操作条件，无需先执行连接测试。测试未执行、失败或对应旧配置版本均不阻止生成。无候选直接返回三字段 null，不调用模型。
+- 管理员连接测试只发送一次固定短文本，不使用工单材料，不自动保存配置或启用 AI；测试结果是诊断信息。保留 testedVersion、occurredAt、current 和 attempt_id 对最新尝试的保护，不返回或传递 outputMode。
+- 内部 classification-suggestions 正文为 {modelConnection,ticket:{title,description,impactScope},businessTypes:[{id,name,description?}]}。Python 调用普通 Chat Completions，提示词要求仅返回 JSON；无 response_format、工具调用、模式探测或自动重试。
+- Python 使用 Pydantic 校验 businessTypeId（本次有效 UUID ID 或 null）、reason（最多 200 字中文说明或 null）、suggestedPriority（P1～P4 或 null），三字段必填，不允许额外字段。ID 与 reason 必须成对为 null 或成对有效，理由非空且无控制字符；重复键、非 JSON、拒答和截断直接返回 AI_INVALID_RESPONSE，不猜测或补齐结果。Java 返回前复核当前权限、状态、配置及类型有效性，人工确认后才修改业务数据。
+- 供应商认证失败返回 503 AI_PROVIDER_AUTH_FAILED，请求限流返回 503 AI_PROVIDER_RATE_LIMITED，请求参数/模型/地址被拒绝返回 503 AI_PROVIDER_REQUEST_REJECTED，网络或其他供应商故障返回 503 DEPENDENCY_UNAVAILABLE；超时返回 504 AI_TIMEOUT，响应无效返回 503 AI_INVALID_RESPONSE。仅向页面和日志提供固定错误类别，不返回供应商原始正文或凭据。
+- Java→Python 正文最多 128 KiB；完整模型请求最多 256 KiB，超限明确拒绝、不截断候选；建议输出预算 1024 tokens，连接测试 16 tokens，模型响应最多 64 KiB，Java 内部响应最多 16 KiB。超时边界沿用上文。

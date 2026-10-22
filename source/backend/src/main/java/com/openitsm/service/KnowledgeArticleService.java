@@ -9,6 +9,6 @@ import java.util.UUID;
 public interface KnowledgeArticleService {
     KnowledgeArticlePageVO list(AuthContext context, String view, String page, String q, String category);
     KnowledgeArticleVO detail(AuthContext context, UUID id);
-    ActionVO create(AuthContext context, SaveKnowledgeArticleRequest body, String key);
-    ActionVO change(AuthContext context, UUID id, String action, SaveKnowledgeArticleRequest body, String version, String key);
+    ActionVO create(AuthContext context, SaveKnowledgeArticleRequest body);
+    ActionVO change(AuthContext context, UUID id, String action, SaveKnowledgeArticleRequest body);
 }

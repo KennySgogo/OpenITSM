@@ -5,7 +5,7 @@ export interface KnowledgeArticle {
   createdAt: string; updatedAt: string; publishedAt: string | null;
 }
 export interface KnowledgeArticlePage { items: KnowledgeArticle[]; page: number; pageSize: number; total: number }
-export interface SaveKnowledgeArticle { title: string; content: string; category: string }
+export interface SaveKnowledgeArticle { title: string; content: string; category: string; version?: number }
 export type MemberStatus = 'INVITED' | 'ACTIVE' | 'DISABLED';
 export interface User {
   id: string;
@@ -32,8 +32,6 @@ export interface MemberPage {
 }
 export interface MemberAction {
   resourceId: string;
-  acceptedVersion: number;
-  replayed: boolean;
 }
 export interface FieldError { field: string; code: string; message: string }
 export interface CreateTicketRequest {
@@ -45,7 +43,6 @@ export interface CreateTicketRequest {
 export interface CreatedTicket {
   id: string;
   number: string;
-  replayed: boolean;
 }
 export type TicketView = 'MINE' | 'ASSIGNED' | 'UNASSIGNED' | 'ALL';
 export type TicketStatus = 'NEW' | 'IN_PROGRESS' | 'ON_HOLD' | 'RESOLVED' | 'CLOSED' | 'REJECTED';
@@ -64,7 +61,7 @@ export interface Ticket {
   resolvedAt: string | null; rejectionReason: string | null; rejectedAt: string | null;
 }
 export interface TicketPage { items: Ticket[]; page: number; pageSize: number; total: number }
-export interface TicketAction { resourceId: string; acceptedVersion: number; replayed: boolean }
+export interface TicketAction { resourceId: string }
 export interface ClassificationSuggestion {
   businessTypeId: string | null; reason: string | null; suggestedPriority: 'P1' | 'P2' | 'P3' | 'P4' | null;
 }

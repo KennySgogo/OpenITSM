@@ -20,8 +20,6 @@ export class ApiError extends Error {
 export interface RequestOptions {
   method?: string;
   body?: unknown;
-  version?: number;
-  key?: string;
   binary?: boolean;
 }
 let csrfToken = '';
@@ -38,9 +36,8 @@ export async function refreshCsrf(): Promise<void> {
   }
   return csrfRequest;
 }
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export async function request<T>(path: string, options: RequestOptions = {}, csrfRetry = false, busyRetries = 0): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}, csrfRetry = false): Promise<T> {
   const method = options.method || 'GET';
   const writing = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   if (writing && !csrfToken) await refreshCsrf();
@@ -48,8 +45,6 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
   if (writing) headers['X-CSRF-Token'] = csrfToken;
   const multipart = options.body instanceof FormData;
   if (options.body !== undefined && !multipart) headers['Content-Type'] = 'application/json';
-  if (options.version !== undefined) headers['If-Match'] = `"${options.version}"`;
-  if (options.key) headers['Idempotency-Key'] = options.key;
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
@@ -73,13 +68,9 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
   if (failure.code === 'CSRF_INVALID') {
     if (!csrfRetry) {
       await refreshCsrf();
-      return request<T>(path, options, true, busyRetries);
+      return request<T>(path, options, true);
     }
     window.location.reload();
-  }
-  if (failure.code === 'REQUEST_IN_PROGRESS' && busyRetries < 2) {
-    await sleep(1000);
-    return request<T>(path, options, csrfRetry, busyRetries + 1);
   }
   if (response.status === 429 && path !== '/auth/activity' && path !== '/settings/model-connection-tests') cooldownUntil = Math.max(cooldownUntil, Date.now() + failure.retryAfter * 1000);
   if (response.status === 401 && failure.code !== 'AUTH_INVALID') expired(failure);

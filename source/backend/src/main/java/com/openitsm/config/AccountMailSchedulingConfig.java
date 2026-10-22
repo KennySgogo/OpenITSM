@@ -4,22 +4,19 @@ import com.openitsm.common.exception.BusinessException;
 import com.openitsm.service.AccountMailDispatchService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
 @Configuration
 @EnableScheduling
-@ConditionalOnProperty(prefix="openitsm.account-mail", name="enabled", havingValue="true")
 public class AccountMailSchedulingConfig {
     private static final Logger log = LoggerFactory.getLogger(AccountMailSchedulingConfig.class);
     private final AccountMailDispatchService dispatch;
     private String lastFailure;
     public AccountMailSchedulingConfig(AccountMailDispatchService dispatch) { this.dispatch = dispatch; }
 
-    @Scheduled(fixedDelayString="${openitsm.account-mail.poll-interval-ms:5000}",
-               initialDelayString="${openitsm.account-mail.initial-delay-ms:5000}")
+    @Scheduled(fixedDelay = 5000, initialDelay = 5000)
     public void poll() {
         try {
             dispatch.dispatchPending();

@@ -8,6 +8,6 @@ import java.util.UUID;
 
 public interface TicketTypeService {
     List<TicketTypeVO> list(AuthContext context, String view);
-    com.openitsm.vo.CreatedTicketTypeVO create(AuthContext context, SaveTicketTypeRequest body, String key);
-    ActionVO change(AuthContext context, UUID id, SaveTicketTypeRequest body, String version, String key);
+    com.openitsm.vo.CreatedTicketTypeVO create(AuthContext context, SaveTicketTypeRequest body);
+    ActionVO change(AuthContext context, UUID id, SaveTicketTypeRequest body);
 }

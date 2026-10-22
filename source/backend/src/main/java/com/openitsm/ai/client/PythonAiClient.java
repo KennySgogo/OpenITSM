@@ -25,17 +25,15 @@ public class PythonAiClient {
         .followRedirects(HttpClient.Redirect.NEVER).build();
     public PythonAiClient(ObjectMapper json, Environment env) { this.json = json; this.env = env; }
 
-    public String testConnection(SettingsSnapshot.Model model) {
+    public void testConnection(SettingsSnapshot.Model model) {
         var result = invoke("/internal/v1/model-connection-tests", Map.of("modelConnection", connection(model)));
-        String mode = result.path("outputMode").asText();
-        if (!"SUCCESS".equals(result.path("status").asText()) || !Set.of("JSON_SCHEMA", "TOOL_CALL").contains(mode)) throw invalid();
-        return mode;
+        if (!"SUCCESS".equals(result.path("status").asText())) throw invalid();
     }
 
     public record BusinessTypeCandidate(UUID id, String name, String description) {}
 
     public ClassificationSuggestionVO suggestClassification(SettingsSnapshot.Model model, String title, String description,
-        String impactScope, List<BusinessTypeCandidate> candidates, String mode) {
+        String impactScope, List<BusinessTypeCandidate> candidates) {
         var types = candidates.stream().map(candidate -> {
             var value = new LinkedHashMap<String, String>();
             value.put("id", candidate.id().toString()); value.put("name", candidate.name());
@@ -43,7 +41,7 @@ public class PythonAiClient {
             return value;
         }).toList();
         var result = invoke("/internal/v1/classification-suggestions", Map.of("modelConnection", connection(model),
-            "ticket", Map.of("title", title, "description", description, "impactScope", impactScope), "businessTypes", types, "outputMode", mode));
+            "ticket", Map.of("title", title, "description", description, "impactScope", impactScope), "businessTypes", types));
         try { return json.treeToValue(result, ClassificationSuggestionVO.class); }
         catch (com.fasterxml.jackson.core.JacksonException | IllegalArgumentException ex) { throw invalid(); }
     }
@@ -53,19 +51,16 @@ public class PythonAiClient {
     }
 
     private JsonNode invoke(String path, Map<String, ?> payload) {
-        String token = env.getProperty("openitsm.ai.internal-token", env.getProperty("OPENITSM_AI_INTERNAL_TOKEN", ""));
         String base = env.getProperty("openitsm.ai.service-url", env.getProperty("OPENITSM_AI_SERVICE_URL", "http://127.0.0.1:8001"));
-        if (token.length() < 32 || token.contains("\r") || token.contains("\n")) throw unavailable();
         CompletableFuture<HttpResponse<byte[]>> task = null;
         try {
             URI target = URI.create(base.replaceAll("/+$", "") + path);
             if (target.getHost() == null || target.getUserInfo() != null || target.getQuery() != null || target.getFragment() != null
-                || !("https".equals(target.getScheme()) || ("http".equals(target.getScheme())
-                    && com.openitsm.service.impl.SettingsValidation.loopback(target.getHost())))) throw unavailable();
+                || !("http".equals(target.getScheme()) && com.openitsm.service.impl.SettingsValidation.loopback(target.getHost()))) throw unavailable();
             String body = json.writeValueAsString(payload);
             if (body.getBytes(StandardCharsets.UTF_8).length > 131072) throw new BusinessException(503, "AI_REQUEST_TOO_LARGE", "AI 材料过大，请减少材料或人工选择");
             var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + token).POST(HttpRequest.BodyPublishers.ofString(body)).build();
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build();
             task = http.sendAsync(request, info -> new BoundedBodySubscriber());
             var response = task.get(16, TimeUnit.SECONDS);
             var result = json.readTree(response.body());
@@ -77,8 +72,13 @@ public class PythonAiClient {
             String code = result.path("code").asText();
             if (response.statusCode() == 504 && "AI_TIMEOUT".equals(code)) throw timeout();
             if (response.statusCode() == 503 && "AI_INVALID_RESPONSE".equals(code)) throw invalid();
-            if (response.statusCode() == 503 && "AI_STRUCTURED_OUTPUT_UNSUPPORTED".equals(code))
-                throw new BusinessException(503, code, "模型连接不支持结构化输出，请更换兼容连接或人工处理");
+            if (response.statusCode() == 503) {
+                switch (code) {
+                    case "AI_PROVIDER_AUTH_FAILED" -> throw new BusinessException(503, code, "模型服务认证失败，请管理员检查 API 密钥和访问权限");
+                    case "AI_PROVIDER_RATE_LIMITED" -> throw new BusinessException(503, code, "模型服务请求受限，请稍后重试或检查供应商额度");
+                    case "AI_PROVIDER_REQUEST_REJECTED" -> throw new BusinessException(503, code, "模型服务拒绝请求，请管理员检查地址、模型名称和请求参数");
+                }
+            }
             if (response.statusCode() == 503 && "AI_REQUEST_TOO_LARGE".equals(code))
                 throw new BusinessException(503, code, "AI 材料过大，请减少材料或人工选择");
             throw unavailable();

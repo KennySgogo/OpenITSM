@@ -7,6 +7,6 @@ import com.openitsm.vo.ModelConnectionTestVO;
 
 public interface SettingsService {
     SettingsVO detail(AuthContext context);
-    ActionVO update(AuthContext context, JsonNode body, String version, String key);
+    ActionVO update(AuthContext context, JsonNode body);
     ModelConnectionTestVO testModel(AuthContext context);
 }

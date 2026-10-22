@@ -4,7 +4,6 @@ import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from '../components/ErrorNotice.vue';
 import { ApiError, request } from '../api/HttpClient';
-import type { RequestOptions } from '../api/HttpClient';
 import { roleLabels, statusLabels } from '../types/ApiTypes';
 import type { MemberPage, MemberAction, User, Role, MemberStatus } from '../types/ApiTypes';
 import { useFeedback } from '../composables/useFeedback';
@@ -46,8 +45,6 @@ const operation = ref<Operation>('invite');
 const target = ref<User>();
 const form = ref<FormInstance>();
 const model = reactive({ name: '', email: '', role: 'EMPLOYEE' as Role, reason: '' });
-const pending = ref<{ path: string; options: RequestOptions }>();
-const mayRetry = computed(() => !!pending.value && !!error.value && (error.value.retryable || error.value.code === 'REQUEST_IN_PROGRESS'));
 const titles: Record<Operation, string> = { invite: '邀请新成员', edit: '编辑成员', disable: '停用成员', unlock: '解除登录锁定', 'invitation-resend': '重新发送邀请' };
 const rules: FormRules = {
   name: [{ required: true, whitespace: true, message: '请输入姓名', trigger: 'blur' }, { max: 80, message: '姓名最多 80 个字符', trigger: 'blur' }],
@@ -63,43 +60,30 @@ function open(action: Operation, member?: User) {
   model.role = member?.role || 'EMPLOYEE';
   model.reason = '';
   error.value = undefined;
-  pending.value = undefined;
+
   dialog.value = true;
 }
-function close() { if (!busy.value) { dialog.value = false; pending.value = undefined; } }
+function close() { if (!busy.value) { dialog.value = false; } }
 async function submit() {
   if (blocked.value) return;
-  if (!pending.value) {
-    if (['invite', 'edit', 'disable'].includes(operation.value) && !await form.value?.validate().catch(() => false)) return;
-    const member = target.value;
-    let body: unknown;
-    if (operation.value === 'invite') body = { name: model.name.trim(), email: model.email.trim().toLowerCase(), role: model.role };
-    if (operation.value === 'edit') body = { name: model.name.trim(), role: model.role };
-    if (operation.value === 'disable') body = { reason: model.reason.trim() };
-    const suffix = operation.value === 'invite' || operation.value === 'edit' ? '' : `/${operation.value}`;
-    pending.value = {
-      path: operation.value === 'invite' ? '/users' : `/users/${member!.id}${suffix}`,
-      options: { method: operation.value === 'edit' ? 'PATCH' : 'POST', body, key: crypto.randomUUID(), ...(member ? { version: member.version } : {}) }
-    };
-  }
-  busy.value = true;
-  error.value = undefined;
+  if (['invite', 'edit', 'disable'].includes(operation.value) && !await form.value?.validate().catch(() => false)) return;
+  const member = target.value;
+  let body: unknown;
+  if (operation.value === 'invite') body = { name: model.name.trim(), email: model.email.trim().toLowerCase(), role: model.role };
+  if (operation.value === 'edit') body = { name: model.name.trim(), role: model.role };
+  if (operation.value === 'disable') body = { reason: model.reason.trim() };
+  const suffix = operation.value === 'invite' || operation.value === 'edit' ? '' : `/${operation.value}`;
+  const path = operation.value === 'invite' ? '/users' : `/users/${member!.id}${suffix}`;
+  busy.value = true; error.value = undefined;
   try {
-    const value = await request<MemberAction>(pending.value.path, pending.value.options);
-    ElMessage.success(value.replayed ? '此操作此前已受理，已同步最新列表' : operation.value === 'invite' || operation.value === 'invitation-resend' ? '邀请已受理，成员须通过邮件链接激活后登录' : '成员操作已完成');
+    await request(path, { method: operation.value === 'edit' ? 'PATCH' : 'POST', body });
+    ElMessage.success(operation.value === 'invite' || operation.value === 'invitation-resend' ? '邀请已受理，成员须通过邮件链接激活后登录' : '成员操作已完成');
     dialog.value = false;
-    pending.value = undefined;
     await load();
-    if (target.value?.id === sessionState.session?.user.id) await restoreSession();
+    if (member?.id === sessionState.session?.user.id) await restoreSession();
   } catch (value) {
     showError(value);
-    const failure = error.value!;
-    if (['VERSION_CONFLICT', 'RESOURCE_NOT_FOUND', 'INVALID_STATE', 'PRECONDITION_REQUIRED', 'IDEMPOTENCY_CONFLICT'].includes(failure.code)) {
-      dialog.value = false;
-      pending.value = undefined;
-      await load();
-      // Retain the server message on the page; never silently resubmit a changed version.
-    } else if (!failure.retryable && failure.code !== 'REQUEST_IN_PROGRESS') pending.value = undefined;
+    await load();
   } finally { busy.value = false; }
 }
 </script>
@@ -124,14 +108,14 @@ async function submit() {
   <ElDialog v-model="dialog" :title="titles[operation]" width="480px" :close-on-click-modal="false" :close-on-press-escape="!busy" :show-close="!busy" :before-close="(done: () => void) => { if (!busy) done(); }" destroy-on-close>
     <p class="dialog-description">{{ operation === 'invite' ? '邀请链接有效期 48 小时。成员设置密码后即可加入团队。' : `${target?.name} · ${target?.email}` }}</p>
     <ErrorNotice :error="error" />
-    <ElAlert v-if="mayRetry" title="重试将复用本次请求的幂等键和原始内容。若需修改内容，请关闭弹窗重新操作。" type="info" :closable="false"/>
-    <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || !!pending" @submit.prevent="submit">
+
+    <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy" @submit.prevent="submit">
       <template v-if="operation === 'invite' || operation === 'edit'"><ElFormItem label="姓名" prop="name"><ElInput v-model="model.name" placeholder="成员姓名" :maxlength="80"/></ElFormItem><ElFormItem v-if="operation === 'invite'" label="邮箱地址" prop="email"><ElInput v-model="model.email" placeholder="name@company.com" :maxlength="254"/></ElFormItem><ElFormItem label="成员角色" prop="role"><ElSelect v-model="model.role"><ElOption v-for="(label, role) in roleLabels" :key="role" :label="label" :value="role"/></ElSelect></ElFormItem><p class="role-description">员工：提交本人问题 · 工程师：处理工单 · 管理员：管理团队并处理本人负责工单</p></template>
       <ElFormItem v-if="operation === 'disable'" label="停用原因" prop="reason"><ElInput v-model="model.reason" type="textarea" :rows="4" :maxlength="500" show-word-limit placeholder="请填写 5～500 个字符的原因，用于审计记录"/></ElFormItem>
     </ElForm>
     <ElAlert v-if="operation === 'disable'" title="停用后将立即结束该成员的全部会话，并使邀请与重置链接失效。" type="warning" :closable="false"/>
     <ElAlert v-if="operation === 'invitation-resend'" title="重新发送后，之前的邀请链接将立即失效。" type="info" :closable="false"/>
     <ElAlert v-if="operation === 'unlock'" title="解除后成员可以重新尝试登录。" type="info" :closable="false"/>
-    <template #footer><ElButton :disabled="busy" @click="close">取消</ElButton><ElButton :type="operation === 'disable' ? 'danger' : 'primary'" :loading="busy" :disabled="blocked" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : mayRetry ? '重试原操作' : operation === 'invite' ? '发送邀请' : operation === 'edit' ? '保存修改' : '确认操作' }}</ElButton></template>
+    <template #footer><ElButton :disabled="busy" @click="close">取消</ElButton><ElButton :type="operation === 'disable' ? 'danger' : 'primary'" :loading="busy" :disabled="blocked" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : operation === 'invite' ? '发送邀请' : operation === 'edit' ? '保存修改' : '确认操作' }}</ElButton></template>
   </ElDialog>
 </template>

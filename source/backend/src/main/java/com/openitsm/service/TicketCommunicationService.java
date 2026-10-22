@@ -8,7 +8,7 @@ import java.util.UUID;
 
 public interface TicketCommunicationService {
     ActionVO append(AuthContext context, UUID id, boolean internal, CreateTicketReplyRequest body,
-        String version, String key, UUID requestId);
+        UUID requestId);
     TicketReplyPageVO replies(AuthContext context, UUID id, String page);
     TicketOperationPageVO operations(AuthContext context, UUID id, String page);
 }

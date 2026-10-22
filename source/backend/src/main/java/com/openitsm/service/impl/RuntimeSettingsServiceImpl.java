@@ -11,11 +11,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class RuntimeSettingsServiceImpl implements RuntimeSettingsService {
     private final SettingsMapper settings;
-    private final AccountMailCipher cipher;
     private final MailProperties mail;
     private final Environment env;
-    public RuntimeSettingsServiceImpl(SettingsMapper settings, AccountMailCipher cipher, MailProperties mail, Environment env) {
-        this.settings = settings; this.cipher = cipher; this.mail = mail; this.env = env;
+    public RuntimeSettingsServiceImpl(SettingsMapper settings, MailProperties mail, Environment env) {
+        this.settings = settings; this.mail = mail; this.env = env;
     }
     public SettingsSnapshot current() {
         var row = settings.selectById(SettingsEntity.ID);
@@ -30,12 +29,8 @@ public class RuntimeSettingsServiceImpl implements RuntimeSettingsService {
                     env.getProperty("openitsm.model.api-key", "")), false);
         }
         return new SettingsSnapshot(row.version, row.teamName,
-            new SettingsSnapshot.Smtp(row.smtpHost, row.smtpPort, row.smtpUsername, row.smtpFrom, row.smtpSecurity, open(row.smtpPassword, "smtp")),
-            new SettingsSnapshot.Model(row.modelBaseUrl, row.modelName, open(row.modelApiKey, "model")), row.aiEnabled);
-    }
-    private String open(String sealed, String purpose) {
-        try { return sealed == null ? null : cipher.open(sealed, "settings:" + SettingsEntity.ID + ":" + purpose); }
-        catch (Exception ex) { throw new com.openitsm.common.exception.BusinessException(503, "DEPENDENCY_UNAVAILABLE", "设置凭据暂不可用，请联系管理员"); }
+            new SettingsSnapshot.Smtp(row.smtpHost, row.smtpPort, row.smtpUsername, row.smtpFrom, row.smtpSecurity, row.smtpPassword),
+            new SettingsSnapshot.Model(row.modelBaseUrl, row.modelName, row.modelApiKey), row.aiEnabled);
     }
     private static String value(String value) { return value == null ? "" : value; }
 }

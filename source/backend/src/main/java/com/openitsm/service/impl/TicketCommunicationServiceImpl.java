@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.dto.CreateTicketReplyRequest;
 import com.openitsm.entity.TicketEntity;
 import com.openitsm.entity.TicketOperationEntity;
@@ -16,7 +15,6 @@ import com.openitsm.mapper.TicketReplyMapper;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.AuditService;
 import com.openitsm.service.AuthContext;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.TicketCommunicationService;
 import com.openitsm.service.TicketNotificationService;
@@ -42,7 +40,6 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
     private final TicketReplyMapper replies;
     private final TicketOperationMapper operations;
     private final UserMapper users;
-    private final IdempotencyService idem;
     private final AuditService audit;
     private final SessionService sessions;
     private final Clock clock;
@@ -50,25 +47,20 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
     private final TicketNotificationService notifications;
 
     public TicketCommunicationServiceImpl(TicketMapper tickets, TicketReplyMapper replies, TicketOperationMapper operations,
-        UserMapper users, IdempotencyService idem, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json,
+        UserMapper users, AuditService audit, SessionService sessions, Clock clock, ObjectMapper json,
         TicketNotificationService notifications) {
         this.tickets = tickets; this.replies = replies; this.operations = operations; this.users = users;
-        this.idem = idem; this.audit = audit; this.sessions = sessions; this.clock = clock; this.json = json;
+        this.audit = audit; this.sessions = sessions; this.clock = clock; this.json = json;
         this.notifications = notifications;
     }
 
     @Override
     @Transactional
     public ActionVO append(AuthContext context, UUID id, boolean internal, CreateTicketReplyRequest body,
-        String version, String key, UUID requestId) {
-        long expectedVersion = Values.version(version);
-        UUID requestKey = idem.key(key);
+        UUID requestId) {
         if (body == null || body.content() == null || body.content().isBlank())
             throw BusinessException.field("content", "请填写回复内容");
-        String operation = "POST /api/v1/tickets/" + id + (internal ? "/internal-notes" : "/replies");
-        String hash = idem.hash(body, version);
         UUID actorId = context.user().id;
-        idem.reserve(actorId, operation, requestKey);
         // Same member -> ticket lock order as existing ticket writes; protects role changes and closure races.
         var actor = users.lock(actorId);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
@@ -77,10 +69,6 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
         requireVisible(actor, ticket);
         if (internal && "EMPLOYEE".equals(actor.role))
             throw new BusinessException(403, "FORBIDDEN", "无操作权限");
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
-        if (ticket.version != expectedVersion)
-            throw new BusinessException(409, "VERSION_CONFLICT", "工单已更新，请刷新后重试");
         if (Set.of("CLOSED", "REJECTED").contains(ticket.status))
             throw new BusinessException(409, "INVALID_STATE", "工单已关闭，不能追加回复，请新建工单");
         var reply = new TicketReplyEntity();
@@ -98,7 +86,7 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
             Map.of("replyId", reply.id), null, requestId);
         if (!internal) notifications.enqueue(ticket, actorId, "replies");
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, id, ticket.version, 200);
+        return new ActionVO(id);
     }
 
     @Override

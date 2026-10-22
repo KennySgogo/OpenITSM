@@ -168,7 +168,6 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public void requestReset(String email) {
         // Check configuration for all addresses before looking up identity: same failure surface.
-        mail.requireReady();
         UserEntity user = users.lockEmail(email);
         if (user == null || !"ACTIVE".equals(user.status)) return;
         tokens.issue(user.id, "RESET", Duration.ofMinutes(30));

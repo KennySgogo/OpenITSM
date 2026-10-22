@@ -6,35 +6,34 @@ from unittest.mock import patch
 
 import httpx
 
-from app.main import app, output_type
+from app.main import app
 
 
-TOKEN = "m09-private-http-test-token-1234567890"
 SECRET = "m09-provider-test-secret"
 TYPE_ID = "00000000-0000-0000-0000-000000000091"
 
 
 class ClassificationSuggestionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        environment = patch.dict(os.environ, {"OPENITSM_AI_INTERNAL_TOKEN": TOKEN, "OPENITSM_AI_ALLOW_LOCAL_MODEL": "true"})
+        environment = patch.dict(os.environ, {"OPENITSM_AI_ALLOW_LOCAL_MODEL": "true"})
         environment.start()
         self.addCleanup(environment.stop)
 
     def body(self):
         return {"modelConnection": {"baseUrl": "http://127.0.0.1:9999/v1", "model": "test", "apiKey": SECRET},
                 "ticket": {"title": "网络故障", "description": "无法连接公司网络", "impactScope": "团队"},
-                "businessTypes": [{"id": TYPE_ID, "name": "网络"}], "outputMode": "JSON_SCHEMA"}
+                "businessTypes": [{"id": TYPE_ID, "name": "网络"}]}
 
-    async def call(self, body, provider=None, token=TOKEN):
+    async def call(self, body, provider=None):
         real_client = httpx.AsyncClient
-        async with real_client(transport=httpx.ASGITransport(app=app), base_url="http://ai") as client:
+        async with real_client(transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 12345)), base_url="http://ai") as client:
             if provider is None:
                 return await client.post("/internal/v1/classification-suggestions",
-                                         headers={"Authorization": "Bearer " + token}, json=body)
+                                         json=body)
             with patch("app.main.httpx.AsyncClient", side_effect=lambda **kwargs: real_client(
                     transport=httpx.MockTransport(provider), **kwargs)):
                 return await client.post("/internal/v1/classification-suggestions",
-                                         headers={"Authorization": "Bearer " + token}, json=body)
+                                         json=body)
 
     async def test_only_supplied_public_materials_reach_model_and_result_is_suggestion(self):
         seen = []
@@ -51,19 +50,16 @@ class ClassificationSuggestionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].headers["Authorization"], "Bearer " + SECRET)
         payload = json.loads(seen[0].content)
-        schema = payload["response_format"]["json_schema"]
-        self.assertTrue(schema["strict"])
-        self.assertEqual(schema["schema"], output_type([TYPE_ID]).model_json_schema())
-        self.assertEqual(schema["schema"]["required"], ["businessTypeId", "reason", "suggestedPriority"])
-        self.assertFalse(schema["schema"]["additionalProperties"])
-        self.assertIn(TYPE_ID, json.dumps(schema))
+        self.assertNotIn("response_format", payload)
+        self.assertNotIn("tools", payload)
+        self.assertNotIn("tool_choice", payload)
+        self.assertIn("JSON", payload["messages"][0]["content"])
         messages = payload["messages"]
         materials = json.loads(messages[1]["content"])
         self.assertEqual(materials, {"ticket": self.body()["ticket"], "businessTypes": self.body()["businessTypes"]})
         self.assertNotIn(SECRET, messages[0]["content"] + messages[1]["content"])
 
     async def test_rejects_unauthorized_or_unexpected_materials_before_provider(self):
-        self.assertEqual((await self.call(self.body(), token="wrong")).status_code, 401)
         for changed in [dict(self.body(), internalNote="private"), dict(self.body(), businessTypes=[]),
                         dict(self.body(), ticket={"title": "x", "description": "x", "impactScope": "x", "attachment": "private"})]:
             response = await self.call(changed)
@@ -126,25 +122,14 @@ class ClassificationSuggestionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 504)
         self.assertEqual(response.json(), {"code": "AI_TIMEOUT"})
 
-    async def test_tool_mode_and_invalid_envelopes_never_trigger_retries(self):
-        body = self.body()
-        body["outputMode"] = "TOOL_CALL"
+    async def test_invalid_envelopes_never_trigger_retries_or_output_repair(self):
         valid = {"businessTypeId": TYPE_ID, "reason": "Network", "suggestedPriority": "P3"}
-        seen = []
-        def provider(request):
-            seen.append(json.loads(request.content))
-            return httpx.Response(200, json={"choices": [{"finish_reason": "tool_calls", "message": {
-                "tool_calls": [{"type": "function", "function": {"name": "classification_suggestion", "arguments": json.dumps(valid)}}]}}]})
-        self.assertEqual((await self.call(body, provider)).json(), valid)
-        self.assertEqual(len(seen), 1)
-        self.assertEqual(seen[0]["tool_choice"]["function"]["name"], "classification_suggestion")
-        self.assertTrue(seen[0]["tools"][0]["function"]["strict"])
-        self.assertFalse(seen[0]["parallel_tool_calls"])
         envelopes = [
             {"choices": [{"finish_reason": "length", "message": {"content": json.dumps(valid)}}]},
             {"choices": [{"finish_reason": "stop", "message": {"refusal": "private", "content": json.dumps(valid)}}]},
             {"choices": [{"finish_reason": "stop", "message": {"content": "```json\n{}\n```"}}]},
             {"choices": [{"finish_reason": "stop", "message": {"content": '{"businessTypeId":null,"businessTypeId":null,"reason":null,"suggestedPriority":null}'}}]},
+            {"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": []}}]},
         ]
         for envelope in envelopes:
             count = []
@@ -153,10 +138,20 @@ class ClassificationSuggestionTest(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json=envelope)
             self.assertEqual((await self.call(self.body(), invalid)).json(), {"code": "AI_INVALID_RESPONSE"})
             self.assertEqual(len(count), 1)
-        for name, calls in [("wrong_tool", 1), ("classification_suggestion", 2)]:
-            envelope = {"choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [
-                {"type": "function", "function": {"name": name, "arguments": json.dumps(valid)}}] * calls}}]}
-            self.assertEqual((await self.call(body, lambda request: httpx.Response(200, json=envelope))).json(), {"code": "AI_INVALID_RESPONSE"})
+
+    async def test_pre_creation_can_omit_or_leave_impact_scope_empty(self):
+        for omitted in (True, False):
+            body = self.body()
+            if omitted:
+                del body["ticket"]["impactScope"]
+            else:
+                body["ticket"]["impactScope"] = ""
+            def provider(request):
+                sent = json.loads(request.content)
+                self.assertEqual(json.loads(sent["messages"][1]["content"])["ticket"]["impactScope"], "")
+                return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
+                    "businessTypeId": TYPE_ID, "reason": "网络问题", "suggestedPriority": "P3"})}}]})
+            self.assertEqual((await self.call(body, provider)).status_code, 200)
 
     async def test_candidate_input_and_serialized_request_size_are_checked(self):
         body = self.body()

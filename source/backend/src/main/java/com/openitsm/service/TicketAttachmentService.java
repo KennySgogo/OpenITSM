@@ -7,8 +7,7 @@ import com.openitsm.vo.TicketAttachmentPageVO;
 import java.util.UUID;
 
 public interface TicketAttachmentService {
-    ActionVO upload(AuthContext context, UUID ticketId, UploadTicketAttachmentRequest body, String version, String key, UUID requestId);
+    ActionVO upload(AuthContext context, UUID ticketId, UploadTicketAttachmentRequest body, UUID requestId);
     TicketAttachmentPageVO list(AuthContext context, UUID ticketId, String page);
     AttachmentDownloadVO download(AuthContext context, UUID attachmentId);
-    boolean storageReady();
 }

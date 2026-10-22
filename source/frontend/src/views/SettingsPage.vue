@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import ErrorNotice from '../components/ErrorNotice.vue';
-import { ApiError, request, type RequestOptions } from '../api/HttpClient';
+import { ApiError, request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 
-interface ConnectionStatus { status: string; testedVersion: number | null; occurredAt: string | null; current: boolean; outputMode: string | null }
+interface ConnectionStatus { status: string; testedVersion: number | null; occurredAt: string | null; current: boolean }
 interface Settings {
   id: string; version: number; teamName: string; aiEnabled: boolean;
   smtp: { host: string; port: number; username: string; from: string; security: string; passwordConfigured: boolean };
@@ -17,12 +17,11 @@ const form = reactive({ teamName: '', aiEnabled: false,
   smtp: { host: '', port: 465, username: '', from: '', security: 'SSL', password: '', clearPassword: false },
   model: { baseUrl: '', model: '', apiKey: '', clearApiKey: false } });
 const notice = ref('');
-const pending = ref<RequestOptions>();
 const testCooling = ref(false);
 let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
-const frozen = computed(() => blocked.value || !!pending.value);
+const frozen = computed(() => blocked.value);
 const labels: Record<string, string> = { NOT_TESTED: '未测试', NO_CALLS: '暂无调用', RUNNING: '测试中', SUCCESS: '连接成功',
-  AI_TIMEOUT: '连接超时', AI_INVALID_RESPONSE: '返回格式无效', DEPENDENCY_UNAVAILABLE: '连接不可用', AI_STRUCTURED_OUTPUT_UNSUPPORTED: '不支持结构化输出' };
+  AI_TIMEOUT: '连接超时', AI_INVALID_RESPONSE: '返回格式无效', DEPENDENCY_UNAVAILABLE: '连接不可用', AI_PROVIDER_AUTH_FAILED: '模型认证失败', AI_PROVIDER_RATE_LIMITED: '模型请求受限', AI_PROVIDER_REQUEST_REJECTED: '模型请求被拒绝' };
 const diff = computed(() => {
   const value = saved.value;
   const body: Record<string, unknown> = {};
@@ -58,30 +57,26 @@ async function read(reset: boolean) {
 async function refresh() {
   if (busy.value) return;
   busy.value = true; error.value = undefined;
-  try { await read(true); pending.value = undefined; notice.value = ''; }
+  try { await read(true); notice.value = ''; }
   catch (value) { showError(value); }
   finally { busy.value = false; }
 }
 async function save() {
-  if (blocked.value || !saved.value) return;
+  if (blocked.value || !saved.value || !Object.keys(diff.value).length) return;
   busy.value = true; error.value = undefined; notice.value = '';
-  pending.value ??= { method: 'PATCH', body: JSON.parse(JSON.stringify(diff.value)), version: saved.value.version, key: crypto.randomUUID() };
   try {
-    await request('/settings', pending.value);
-    pending.value = undefined;
+    await request('/settings', { method: 'PATCH', body: diff.value });
     form.smtp.password = ''; form.model.apiKey = '';
-    notice.value = '配置已保存。连接测试和 AI 开关需分别操作。';
+    notice.value = '配置已保存。模型连接测试和 AI 开关需分别操作。';
     await read(true);
-  } catch (value) {
-    showError(value);
-    if (error.value!.status >= 400 && error.value!.status < 500 && error.value!.code !== 'REQUEST_IN_PROGRESS') pending.value = undefined;
-  } finally { busy.value = false; }
+  } catch (value) { showError(value); }
+  finally { busy.value = false; }
 }
 async function test() {
-  if (blocked.value || pending.value || !saved.value) return;
+  if (blocked.value || !saved.value) return;
   busy.value = true; error.value = undefined; notice.value = '';
   try {
-    const result = await request<{ status: string; testedVersion: number; current: boolean; outputMode: string | null }>('/settings/model-connection-tests', { method: 'POST' });
+    const result = await request<{ status: string; testedVersion: number; current: boolean }>('/settings/model-connection-tests', { method: 'POST' });
     notice.value = `已保存版本 ${result.testedVersion} 连接成功。${result.current ? '' : '配置已变化，请重新测试当前版本。'}`;
   } catch (value) {
     showError(value);
@@ -107,12 +102,12 @@ onUnmounted(() => { if (cooldownTimer) clearTimeout(cooldownTimer); });
       <ElButton :disabled="busy" @click="refresh">重新读取（放弃未保存修改）</ElButton></div>
     <ErrorNotice :error="error" />
     <ElAlert v-if="notice" :title="notice" type="success" :closable="false" show-icon />
-    <ElAlert v-if="pending" title="保存结果尚未确认，表单已锁定。请使用原请求重试，或重新读取服务器配置。" type="warning" :closable="false" />
+
     <template v-if="saved">
       <ElForm label-position="top" :disabled="frozen" @submit.prevent="save">
         <ElCard shadow="never"><h2>团队</h2><ElFormItem label="团队名称"><ElInput v-model="form.teamName" maxlength="80" /></ElFormItem></ElCard>
         <ElCard shadow="never"><h2>邮件连接</h2>
-          <p>保存连接不会开启邮件投递。投递总开关与工单邮件开关由服务端维护，启用前须核对积压任务。</p>
+          <p>邮件连接保存后用于账号激活、密码重置和工单通知。</p>
           <div class="settings-grid">
             <ElFormItem label="SMTP 服务器"><ElInput v-model="form.smtp.host" maxlength="253" /></ElFormItem>
             <ElFormItem label="端口"><ElInputNumber v-model="form.smtp.port" :min="1" :max="65535" /></ElFormItem>
@@ -133,13 +128,13 @@ onUnmounted(() => { if (cooldownTimer) clearTimeout(cooldownTimer); });
           <ElFormItem label="AI 总开关"><ElSwitch v-model="form.aiEnabled" /><span class="switch-note">未配置完整连接时不能开启；清除密钥时请同时关闭。</span></ElFormItem>
         </ElCard>
       </ElForm>
-      <div class="settings-actions"><ElButton type="primary" :disabled="blocked || (!pending && !Object.keys(diff).length)" :loading="busy" @click="save">{{ pending ? '重试原保存请求' : '保存配置' }}</ElButton><span>已保存版本 {{ saved.version }}</span></div>
+      <div class="settings-actions"><ElButton type="primary" :disabled="blocked || !Object.keys(diff).length" :loading="busy" @click="save">保存配置</ElButton><span>已保存版本 {{ saved.version }}</span></div>
       <ElCard shadow="never"><h2>连接与调用状态</h2>
-        <p>测试只使用已保存的连接及固定样本验证结构化输出，AI 关闭时也可测试。未保存修改不会参与测试；每位管理员每 1 秒最多一次。</p>
+        <p>测试只使用已保存的连接和固定短文本检查正常响应，AI 关闭时也可测试。未保存修改不会参与测试；每位管理员每 1 秒最多一次。</p>
         <div class="status-line">模型测试：{{ labels[saved.lastTest.status] || saved.lastTest.status }} <span v-if="saved.lastTest.testedVersion !== null"> · 版本 {{ saved.lastTest.testedVersion }} · {{ when(saved.lastTest.occurredAt) }} {{ saved.lastTest.current ? '' : '（旧配置结果）' }}</span></div>
-        <div class="status-line">结构化输出：{{ saved.lastTest.current && saved.lastTest.status === 'SUCCESS' && saved.lastTest.outputMode ? ({ JSON_SCHEMA: 'JSON Schema 严格输出', TOOL_CALL: '强制工具调用' }[saved.lastTest.outputMode] || saved.lastTest.outputMode) : '当前配置未验证，请测试已保存连接' }}</div>
+        <p class="hint">连接测试仅用于排查已保存配置，不影响 AI 建议生成；建议结果仍会校验并由人工确认。</p>
         <div class="status-line">业务调用：{{ labels[saved.lastCall.status] || saved.lastCall.status }}</div>
-        <ElButton :disabled="blocked || testCooling || !!pending || Object.keys(diff).length > 0 || !saved.model.apiKeyConfigured || !saved.model.baseUrl || !saved.model.model || saved.version === 0" :loading="busy" @click="test">{{ testCooling ? '测试冷却中，请稍后重试' : '测试已保存连接' }}</ElButton>
+        <ElButton :disabled="blocked || testCooling || Object.keys(diff).length > 0 || !saved.model.apiKeyConfigured || !saved.model.baseUrl || !saved.model.model || saved.version === 0" :loading="busy" @click="test">{{ testCooling ? '测试冷却中，请稍后重试' : '测试已保存连接' }}</ElButton>
         <p v-if="Object.keys(diff).length">请先保存或放弃表单修改，再测试已保存连接。</p>
       </ElCard>
     </template>

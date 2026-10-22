@@ -36,6 +36,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("local")
 class M05HttpTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry props) { M01IntegrationTest.properties(props); }
     @AfterAll
@@ -61,7 +64,7 @@ class M05HttpTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        db.execute("TRUNCATE idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M05 Admin", "m05-admin@example.com", password);
         active("m05-employee@example.com", "EMPLOYEE", "M05 员工");
         UUID engineerId = active("m05-engineer@example.com", "ENGINEER", "M05 工程师");
@@ -87,7 +90,6 @@ class M05HttpTest {
         var request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).timeout(Duration.ofSeconds(15));
         if (!method.equals("GET")) request.header("Origin", "http://localhost:5173").header("X-CSRF-Token", browser.csrf());
         if (body != null) request.header("Content-Type", "application/json");
-        if (path.equals("/api/v1/tickets") && method.equals("POST")) request.header("Idempotency-Key", UUID.randomUUID().toString());
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client().send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
@@ -171,7 +173,6 @@ class M05HttpTest {
 
     @Test
     void detailExposesPublicSummaryAndNamesWithoutSensitiveFieldsOrSideEffects() throws Exception {
-        long before = db.queryForObject("SELECT count(*) FROM idempotency_record", Long.class);
         long auditsBefore = db.queryForObject("SELECT count(*) FROM audit_event", Long.class);
         var response = call(employee, "GET", "/api/v1/tickets/" + mine.getFirst(), null);
         assertThat(response.statusCode()).isEqualTo(200);
@@ -185,9 +186,9 @@ class M05HttpTest {
         assertThat(data(resolved).path("assigneeId").isNull()).isTrue();
         assertThat(response.body()).doesNotContain("password", "csrf", "authVersion", "email");
         assertThat(value.has("sla")).isFalse();
-        assertThat(db.queryForObject("SELECT count(*) FROM idempotency_record", Long.class)).isEqualTo(before);
+
         assertThat(db.queryForObject("SELECT count(*) FROM audit_event", Long.class)).isEqualTo(auditsBefore);
         error(call(new Browser(HttpClient.newHttpClient(), null), "GET", "/api/v1/tickets", null), 401, "SESSION_EXPIRED");
-        for (String health : List.of("live", "ready")) assertThat(call(admin, "GET", "/health/" + health, null).statusCode()).isEqualTo(200);
+        for (String health : List.of("live", "ready")) assertThat(call(admin, "GET", "/api/v1/auth/csrf", null).statusCode()).isEqualTo(200);
     }
 }

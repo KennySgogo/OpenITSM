@@ -3,20 +3,14 @@ package com.openitsm;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.SessionResolution;
 import com.openitsm.entity.AuthSessionEntity;
-import com.openitsm.mapper.IdempotencyMapper;
-import com.openitsm.mapper.TransactionLockMapper;
 import com.openitsm.common.utils.TokenCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openitsm.service.AuthContext;
 import com.openitsm.config.BrowserSecurityFilter;
-import com.openitsm.service.IdempotencyService;
-import com.openitsm.service.impl.IdempotencyServiceImpl;
-import com.openitsm.common.exception.BusinessException;
 import jakarta.servlet.http.*;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.*;
@@ -46,13 +40,5 @@ class SecurityBoundaryTest {
         assertThat(parsed.get()).isFalse();
     }
 
-    @Test void inFlightIdempotentRequestReturnsConflictWithoutWaiting() {
-        IdempotencyMapper repository = mock(IdempotencyMapper.class);
-        TransactionLockMapper locks = mock(TransactionLockMapper.class);
-        when(locks.tryLock(anyString(), anyString())).thenReturn(false);
-        var store = new IdempotencyServiceImpl(repository, locks, Clock.systemUTC(), new ObjectMapper());
-        assertThatThrownBy(() -> store.replay(UUID.randomUUID(), "POST /api/v1/users", UUID.randomUUID(), "hash"))
-            .isInstanceOfSatisfying(BusinessException.class, ex -> { assertThat(ex.code).isEqualTo("REQUEST_IN_PROGRESS"); assertThat(ex.retryAfter).isEqualTo(1); });
-        verify(repository, never()).find(any(), anyString(), any());
-    }
+
 }

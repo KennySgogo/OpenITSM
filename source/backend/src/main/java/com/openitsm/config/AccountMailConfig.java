@@ -16,19 +16,14 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 @Configuration
 @EnableConfigurationProperties(MailProperties.class)
 public class AccountMailConfig {
-    private final boolean enabled;
     private final String from;
     private final String publicBaseUrl;
     private final MailProperties properties;
     private final Environment environment;
-    @Value("${openitsm.ticket-mail.enabled:false}")
-    private boolean ticketMailEnabled;
 
-    public AccountMailConfig(@Value("${openitsm.account-mail.enabled:false}") boolean enabled,
-                             @Value("${openitsm.account-mail.from:}") String from,
+    public AccountMailConfig(@Value("${openitsm.account-mail.from:}") String from,
                              @Value("${openitsm.account-mail.public-base-url:}") String publicBaseUrl,
                              MailProperties properties, Environment environment) {
-        this.enabled = enabled;
         this.from = from;
         this.publicBaseUrl = publicBaseUrl;
         this.properties = properties;
@@ -58,7 +53,7 @@ public class AccountMailConfig {
 
     public void requireReady() {
         try {
-            if (!enabled || blank(properties.getHost()) || properties.getPort() == null
+            if (blank(properties.getHost()) || properties.getPort() == null
                 || properties.getPort() < 1 || properties.getPort() > 65535) throw new IllegalArgumentException();
             validateAddress(from);
             URI base = URI.create(publicBaseUrl);
@@ -86,7 +81,7 @@ public class AccountMailConfig {
     public String from() { return from; }
     public boolean localProfile() { return environment.matchesProfiles("local", "test"); }
 
-    /** Validate a per-delivery snapshot without changing deployment switches or the shared sender. */
+    /** Validate a per-delivery snapshot without changing the shared sender. */
     public JavaMailSenderImpl runtimeSender(com.openitsm.service.SettingsSnapshot.Smtp value) {
         var mail = new MailProperties();
         mail.setHost(value.host()); mail.setPort(value.port()); mail.setUsername(value.username()); mail.setPassword(value.password());
@@ -95,12 +90,10 @@ public class AccountMailConfig {
         mail.getProperties().put("mail.smtp.starttls.required", Boolean.toString("STARTTLS".equals(value.security())));
         boolean localPeer = localProfile() && loopback(value.host());
         mail.getProperties().put("mail.smtp.auth", Boolean.toString(!localPeer || !blank(value.username())));
-        var effective = new AccountMailConfig(enabled, value.from(), publicBaseUrl, mail, environment);
+        var effective = new AccountMailConfig(value.from(), publicBaseUrl, mail, environment);
         effective.requireReady();
         return effective.javaMailSender();
     }
-    public boolean enabled() { return enabled; }
-    public boolean ticketMailEnabled() { return ticketMailEnabled; }
     public String publicBaseUrl() { return publicBaseUrl.replaceAll("/+$", ""); }
     private static boolean blank(String value) { return value == null || value.isBlank(); }
     private static boolean loopback(String host) { return "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) || "[::1]".equals(host) || "::1".equals(host); }

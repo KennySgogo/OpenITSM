@@ -25,7 +25,7 @@ class AccountMailSmtpTest {
     AccountMailConfig config(boolean enabled, String from, String baseUrl, MailProperties properties) {
         var environment = new MockEnvironment();
         environment.setActiveProfiles("test");
-        return new AccountMailConfig(enabled, from, baseUrl, properties, environment);
+        return new AccountMailConfig(from, baseUrl, properties, environment);
     }
     MailProperties localProperties(int port) {
         var properties = new MailProperties();
@@ -35,12 +35,9 @@ class AccountMailSmtpTest {
         return properties;
     }
 
-    @Test void disabledOrIncompleteConfigurationNeverConnectsToSmtp() {
+    @Test void incompleteConfigurationNeverConnectsToSmtp() {
         JavaMailSender sender = mock(JavaMailSender.class);
         var properties = localProperties(2525);
-        var disabled = new SmtpMailServiceImpl(sender, config(false, "sender@example.com", "http://localhost:5173", properties));
-        assertThatThrownBy(() -> disabled.send("member@example.com", "INVITE", token))
-            .isInstanceOf(BusinessException.class).hasMessage("账号邮件发送配置暂不可用，请联系管理员");
         var incomplete = new SmtpMailServiceImpl(sender, config(true, "", "http://localhost:5173", properties));
         assertThatThrownBy(() -> incomplete.send("member@example.com", "INVITE", token)).isInstanceOf(BusinessException.class);
         verifyNoInteractions(sender);
@@ -102,9 +99,9 @@ class AccountMailSmtpTest {
         properties.getProperties().put("mail.smtp.auth", "true");
         properties.setUsername("sender@example.com");
         properties.setPassword("test-only-authorization");
-        var invalid = new AccountMailConfig(true, "sender@example.com", "http://localhost:5173", properties, environment);
+        var invalid = new AccountMailConfig("sender@example.com", "http://localhost:5173", properties, environment);
         assertThatThrownBy(invalid::requireReady).isInstanceOf(BusinessException.class);
-        var valid = new AccountMailConfig(true, "sender@example.com", "https://itsm.example.com", properties, environment);
+        var valid = new AccountMailConfig("sender@example.com", "https://itsm.example.com", properties, environment);
         assertThatCode(valid::requireReady).doesNotThrowAnyException();
     }
 

@@ -11,7 +11,7 @@ public interface UserService {
     String role(String value);
     UserPageVO list(int page, String query, String role, String status);
     AssigneeListVO assignees();
-    ActionVO invite(AuthContext context, InviteUserRequest body, String keyHeader, UUID requestId);
+    ActionVO invite(AuthContext context, InviteUserRequest body, UUID requestId);
     ActionVO change(AuthContext context, UUID id, String action, UpdateUserRequest patch, String reason,
-        String versionHeader, String keyHeader, UUID requestId);
+        UUID requestId);
 }

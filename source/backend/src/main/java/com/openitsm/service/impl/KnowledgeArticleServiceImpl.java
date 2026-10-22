@@ -2,14 +2,12 @@ package com.openitsm.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.dto.SaveKnowledgeArticleRequest;
 import com.openitsm.entity.KnowledgeArticleEntity;
 import com.openitsm.entity.UserEntity;
 import com.openitsm.mapper.KnowledgeArticleMapper;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.AuthContext;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.KnowledgeArticleService;
 import com.openitsm.service.SessionService;
 import com.openitsm.vo.ActionVO;
@@ -27,13 +25,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class KnowledgeArticleServiceImpl implements KnowledgeArticleService {
     private final KnowledgeArticleMapper articles;
     private final UserMapper users;
-    private final IdempotencyService idem;
     private final SessionService sessions;
     private final Clock clock;
 
-    public KnowledgeArticleServiceImpl(KnowledgeArticleMapper articles, UserMapper users, IdempotencyService idem,
+    public KnowledgeArticleServiceImpl(KnowledgeArticleMapper articles, UserMapper users,
         SessionService sessions, Clock clock) {
-        this.articles = articles; this.users = users; this.idem = idem; this.sessions = sessions; this.clock = clock;
+        this.articles = articles; this.users = users; this.sessions = sessions; this.clock = clock;
     }
 
     @Override
@@ -66,45 +63,35 @@ public class KnowledgeArticleServiceImpl implements KnowledgeArticleService {
 
     @Override
     @Transactional
-    public ActionVO create(AuthContext context, SaveKnowledgeArticleRequest body, String key) {
+    public ActionVO create(AuthContext context, SaveKnowledgeArticleRequest body) {
         validate(body);
-        UUID requestKey = idem.key(key), actorId = context.user().id;
-        String operation = "POST /api/v1/knowledge-articles", hash = idem.hash(body, null);
-        idem.reserve(actorId, operation, requestKey);
+        UUID actorId = context.user().id;
         var actor = lockActor(context);
         requireRole(actor, "ENGINEER");
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
         var article = new KnowledgeArticleEntity();
         article.id = UUID.randomUUID(); article.authorId = actorId; article.status = "DRAFT";
         article.title = body.title().strip(); article.content = body.content().strip(); article.category = body.category().strip();
         article.createdAt = clock.instant(); article.updatedAt = article.createdAt;
         articles.insert(article);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, article.id, article.version, 201);
+        return new ActionVO(article.id);
     }
 
     @Override
     @Transactional
-    public ActionVO change(AuthContext context, UUID id, String action, SaveKnowledgeArticleRequest body, String version, String key) {
-        long expectedVersion = Values.version(version);
+    public ActionVO change(AuthContext context, UUID id, String action, SaveKnowledgeArticleRequest body) {
         if ("edit".equals(action)) validate(body);
-        UUID requestKey = idem.key(key), actorId = context.user().id;
-        String operation = "edit".equals(action) ? "PATCH /api/v1/knowledge-articles/" + id
-            : "POST /api/v1/knowledge-articles/" + id + "/" + action;
-        String hash = idem.hash(body, version);
-        idem.reserve(actorId, operation, requestKey);
+        UUID actorId = context.user().id;
         var actor = lockActor(context);
         if (!"edit".equals(action)) requireRole(actor, "ADMIN");
         var article = articles.lock(id);
         requireVisible(actor, article);
         if ("edit".equals(action) && (!"ENGINEER".equals(actor.role) || !actorId.equals(article.authorId)))
             throw forbidden();
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
-        if (article.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "知识已更新，请刷新后重新确认");
         String expectedState = "unpublish".equals(action) ? "PUBLISHED" : "DRAFT";
         if (!expectedState.equals(article.status)) throw new BusinessException(409, "INVALID_STATE", "当前知识状态不允许此操作");
+        if ("edit".equals(action) && (body.version() == null || body.version() != article.version))
+            throw new BusinessException(409, "VERSION_CONFLICT", "知识正文已更新，请刷新后重新确认");
         switch (action) {
             case "edit" -> { article.title = body.title().strip(); article.content = body.content().strip(); article.category = body.category().strip(); }
             case "publish" -> { article.status = "PUBLISHED"; article.publishedAt = clock.instant(); }
@@ -114,7 +101,7 @@ public class KnowledgeArticleServiceImpl implements KnowledgeArticleService {
         article.version++; article.updatedAt = clock.instant();
         articles.updateById(article);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, id, article.version, 200);
+        return new ActionVO(id);
     }
 
     private UserEntity lockActor(AuthContext context) {

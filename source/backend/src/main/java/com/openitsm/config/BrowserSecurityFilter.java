@@ -46,10 +46,6 @@ public class BrowserSecurityFilter extends OncePerRequestFilter {
         MDC.put("requestId", id);
         try {
             String path = req.getRequestURI();
-            if (path.startsWith("/health/")) {
-                if (!InetAddress.getByName(req.getRemoteAddr()).isLoopbackAddress()) throw new BusinessException(403, "FORBIDDEN", "无访问权限");
-                chain.doFilter(req, res); return;
-            }
             if (!path.startsWith("/api/")) { chain.doFilter(req, res); return; }
             if (!secure && !InetAddress.getByName(req.getRemoteAddr()).isLoopbackAddress()) throw new BusinessException(403, "FORBIDDEN", "开发会话只允许本机访问");
             boolean knowledgeUpload = req.getMethod().equals("POST") && path.matches("/api/v1/knowledge-articles/[0-9a-fA-F-]{36}/attachments")

@@ -27,7 +27,9 @@ import static org.assertj.core.api.Assertions.*;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @org.springframework.context.annotation.Import(M01IntegrationTest.TimeConfig.class)
 class M09HttpTest {
-    static final String TOKEN = "m09-private-http-test-token-1234567890";
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.openitsm.config.AccountMailSchedulingConfig mailScheduler;
+
     static final AtomicInteger CALLS = new AtomicInteger();
     static volatile String response = "{}";
     static volatile String requestBody = "";
@@ -39,9 +41,6 @@ class M09HttpTest {
             PYTHON.createContext("/internal/v1/classification-suggestions", exchange -> {
                 CALLS.incrementAndGet();
                 requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                if (!("Bearer " + TOKEN).equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
-                    exchange.sendResponseHeaders(401, -1); exchange.close(); return;
-                }
                 if (entered != null) entered.countDown();
                 try { if (release != null) release.await(10, TimeUnit.SECONDS); }
                 catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
@@ -56,7 +55,6 @@ class M09HttpTest {
     }
     @DynamicPropertySource static void properties(DynamicPropertyRegistry props) {
         M01IntegrationTest.properties(props);
-        props.add("openitsm.ai.internal-token", () -> TOKEN);
         props.add("openitsm.ai.service-url", () -> "http://127.0.0.1:" + PYTHON.getAddress().getPort());
         props.add("openitsm.model.base-url", () -> "https://bootstrap.example/v1");
         props.add("openitsm.model.name", () -> "bootstrap-model");
@@ -78,7 +76,7 @@ class M09HttpTest {
 
     @BeforeEach void setUp() throws Exception {
         clock.now = Instant.parse("2026-10-21T00:00:00Z");
-        db.execute("TRUNCATE team_settings,ai_connection_status,idempotency_record,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
+        db.execute("TRUNCATE team_settings,ai_connection_status,notification_task,audit_event,account_token,auth_session,auth_rate_bucket,account_bootstrap,app_user CASCADE");
         bootstrap.initialize("M09 Admin", "m09-admin@example.com", password);
         employeeId = active("m09-employee@example.com", "EMPLOYEE");
         ownerId = active("m09-owner@example.com", "ENGINEER");
@@ -100,8 +98,8 @@ class M09HttpTest {
             request.header("Origin", origin);
             if (browser.csrf != null) request.header("X-CSRF-Token", browser.csrf);
         }
-        if (key != null) request.header("Idempotency-Key", key);
-        if (version != null) request.header("If-Match", version);
+
+
         if (body != null) request.header("Content-Type", "application/json");
         request.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
         return browser.client.send(request.build(), HttpResponse.BodyHandlers.ofString());
@@ -137,7 +135,6 @@ class M09HttpTest {
     void enableAi() throws Exception {
         var result = call(admin, "PATCH", "/api/v1/settings", Map.of("aiEnabled", true), UUID.randomUUID().toString(), "\"0\"");
         assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
-        db.update("INSERT INTO ai_connection_status(kind,config_version,status,occurred_at,attempt_id,output_mode) VALUES ('TEST',1,'SUCCESS',?,?, 'JSON_SCHEMA')", java.sql.Timestamp.from(clock.instant()), UUID.randomUUID());
     }
 
     @Test void manualConfirmationChecksRolesStateReplayAndNoPriorityOrMail() throws Exception {
@@ -148,11 +145,10 @@ class M09HttpTest {
         error(confirm(employee, id, Map.of("businessTypeId", newType, "priority", "P1"), UUID.randomUUID().toString(), 0), 400, "VALIDATION_FAILED");
         var first = confirm(employee, id, Map.of("businessTypeId", newType), key, 0);
         assertThat(first.statusCode()).as(first.body()).isEqualTo(200);
-        assertThat(data(first).path("acceptedVersion").asLong()).isEqualTo(1);
-        assertThat(first.headers().firstValue("ETag")).contains("\"1\"");
-        assertThat(data(confirm(employee, id, Map.of("businessTypeId", newType), key, 0)).path("replayed").asBoolean()).isTrue();
-        error(confirm(employee, id, Map.of("businessTypeId", oldType), key, 0), 409, "IDEMPOTENCY_CONFLICT");
-        error(confirm(employee, id, Map.of("businessTypeId", oldType), UUID.randomUUID().toString(), 0), 409, "VERSION_CONFLICT");
+
+
+
+        assertThat(confirm(employee, id, Map.of("businessTypeId", newType), null, 0).statusCode()).isEqualTo(200);
         var stored = db.queryForMap("SELECT business_type_id,business_type,priority,status,assignee_id,version FROM ticket WHERE id=?", id);
         assertThat(stored.get("business_type_id")).isEqualTo(newType);
         assertThat(stored.get("priority")).isEqualTo("P3");
@@ -212,19 +208,23 @@ class M09HttpTest {
         } finally { release.countDown(); entered = null; release = null; }
     }
 
-    @Test void unverifiedOrStaleCapabilityFailsBeforeModelButManualAndNoCandidatesStillWork() throws Exception {
+    @Test void missingFailedOrStaleConnectionTestsDoNotBlockSuggestions() throws Exception {
         UUID id = ticket("NEW"); enableAi();
-        db.update("UPDATE ai_connection_status SET output_mode=NULL WHERE kind='TEST'");
-        error(suggest(employee, id), 503, "AI_CAPABILITY_NOT_VERIFIED");
-        assertThat(CALLS).hasValue(0);
+        response = json.writeValueAsString(Map.of("businessTypeId", newType, "reason", "Network", "suggestedPriority", "P2"));
+        assertThat(suggest(employee, id).statusCode()).isEqualTo(200);
+        assertThat(CALLS).hasValue(1);
+        assertThat(json.readTree(requestBody).has("outputMode")).isFalse();
+        db.update("INSERT INTO ai_connection_status(kind,config_version,status,occurred_at,attempt_id) VALUES ('TEST',0,'DEPENDENCY_UNAVAILABLE',?,?)", java.sql.Timestamp.from(clock.instant()), UUID.randomUUID());
+        assertThat(suggest(employee, id).statusCode()).isEqualTo(200);
+        db.update("UPDATE ai_connection_status SET status='SUCCESS' WHERE kind='TEST'");
+        assertThat(suggest(employee, id).statusCode()).isEqualTo(200);
+        assertThat(CALLS).hasValue(3);
         assertThat(confirm(employee, id, Map.of("businessTypeId", newType), UUID.randomUUID().toString(), 0).statusCode()).isEqualTo(200);
-        db.update("UPDATE ai_connection_status SET output_mode='JSON_SCHEMA',config_version=0 WHERE kind='TEST'");
-        error(suggest(employee, id), 503, "AI_CAPABILITY_NOT_VERIFIED");
         db.update("UPDATE ticket_type SET active=false");
         var empty = suggest(employee, id);
         assertThat(empty.statusCode()).as(empty.body()).isEqualTo(200);
         assertThat(data(empty).path("businessTypeId").isNull()).isTrue();
-        assertThat(CALLS).hasValue(0);
+        assertThat(CALLS).hasValue(3);
     }
 
     @Test void inFlightTypePermissionConfigAndSwitchChangesAreRechecked() throws Exception {
@@ -248,6 +248,85 @@ class M09HttpTest {
                 else if (change.equals("TYPE")) error(result, 503, "AI_INVALID_RESPONSE");
                 else if (change.equals("SWITCH")) error(result, 503, "AI_DISABLED");
                 else error(result, 503, "DEPENDENCY_UNAVAILABLE");
+            } finally { release.countDown(); entered = null; release = null; }
+        }
+    }
+
+    @Test void preCreationSuggestionsAllowAllRolesWithoutCreatingBusinessRows() throws Exception {
+        enableAi();
+        response = json.writeValueAsString(Map.of("businessTypeId", newType, "reason", "Network", "suggestedPriority", "P2"));
+        var counts = new HashMap<String, Integer>();
+        for (String table : List.of("ticket", "audit_event", "notification_task", "ticket_attachment"))
+            counts.put(table, db.queryForObject("SELECT count(*) FROM " + table, Integer.class));
+        for (Browser browser : List.of(employee, owner, admin)) {
+            var result = call(browser, "POST", "/api/v1/ai/classification-suggestions", Map.of("title", "  VPN issue  ", "description", " Network unavailable "), null, null);
+            assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+            assertThat(data(result).path("businessTypeId").asText()).isEqualTo(newType.toString());
+            assertThat(data(result).path("suggestedPriority").asText()).isEqualTo("P2");
+            var sent = json.readTree(requestBody);
+            assertThat(sent.path("ticket").path("title").asText()).isEqualTo("VPN issue");
+            assertThat(sent.path("ticket").path("impactScope").asText()).isEmpty();
+            assertThat(sent.path("businessTypes").toString()).contains(newType.toString());
+            assertThat(sent.path("ticket").has("businessTypeId")).isFalse();
+        }
+        assertThat(CALLS).hasValue(3);
+        for (var count : counts.entrySet())
+            assertThat(db.queryForObject("SELECT count(*) FROM " + count.getKey(), Integer.class)).isEqualTo(count.getValue());
+    }
+
+    @Test void preCreationValidatesFieldsSessionAndCsrfBeforeModel() throws Exception {
+        enableAi();
+        for (Object body : List.of(Map.of(), Map.of("title", " ", "description", "Text"),
+            Map.of("title", 1, "description", "Text"), Map.of("title", "VPN", "description", true),
+            Map.of("title", "VPN", "description", "Text", "impactScope", 1),
+            Map.of("title", "VPN", "description", "Text", "businessTypeId", newType),
+            Map.of("title", "VPN", "description", "Text", "businessTypes", List.of()),
+            Map.of("title", "x".repeat(1001), "description", "Text"),
+            Map.of("title", "VPN", "description", "x".repeat(60001)),
+            Map.of("title", "VPN", "description", "Text", "impactScope", "x".repeat(4001))))
+            error(call(employee, "POST", "/api/v1/ai/classification-suggestions", body, null, null), 400, "VALIDATION_FAILED");
+        var valid = Map.of("title", "VPN", "description", "Text");
+        error(call(new Browser(HttpClient.newHttpClient(), null), "POST", "/api/v1/ai/classification-suggestions", valid, null, null), 401, "SESSION_EXPIRED");
+        error(call(new Browser(employee.client(), null), "POST", "/api/v1/ai/classification-suggestions", valid, null, null), 403, "CSRF_INVALID");
+        assertThat(CALLS).hasValue(0);
+    }
+
+    @Test void preCreationNoCandidatesAndDisabledAiPreserveManualCreation() throws Exception {
+        var body = Map.of("title", "VPN", "description", "Network unavailable", "impactScope", "");
+        error(call(employee, "POST", "/api/v1/ai/classification-suggestions", body, null, null), 503, "AI_DISABLED");
+        assertThat(ticket("NEW")).isNotNull();
+        enableAi();
+        db.update("UPDATE ticket_type SET active=false");
+        var result = call(employee, "POST", "/api/v1/ai/classification-suggestions", body, null, null);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("businessTypeId").isNull()).isTrue();
+        assertThat(CALLS).hasValue(0);
+    }
+
+    @Test void preCreationRechecksUserConfigSwitchAndTypeAfterModelWait() throws Exception {
+        for (String change : List.of("TYPE", "PERMISSION", "CONFIG", "SWITCH")) {
+            setUp(); enableAi();
+            response = json.writeValueAsString(Map.of("businessTypeId", newType, "reason", "Network", "suggestedPriority", "P2"));
+            entered = new CountDownLatch(1); release = new CountDownLatch(1);
+            try {
+                var result = CompletableFuture.supplyAsync(() -> {
+                    try { return call(employee, "POST", "/api/v1/ai/classification-suggestions", Map.of("title", "VPN", "description", "Network"), null, null); }
+                    catch (Exception ex) { throw new CompletionException(ex); }
+                });
+                assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+                switch (change) {
+                    case "TYPE" -> db.update("UPDATE ticket_type SET active=false WHERE id=?", newType);
+                    case "PERMISSION" -> db.update("UPDATE app_user SET status='DISABLED',auth_version=auth_version+1 WHERE id=?", employeeId);
+                    case "CONFIG" -> db.update("UPDATE team_settings SET version=version+1");
+                    case "SWITCH" -> db.update("UPDATE team_settings SET ai_enabled=false,version=version+1");
+                }
+                release.countDown();
+                var response = result.get(8, TimeUnit.SECONDS);
+                if (change.equals("PERMISSION")) error(response, 401, "SESSION_EXPIRED");
+                else if (change.equals("TYPE")) error(response, 503, "AI_INVALID_RESPONSE");
+                else if (change.equals("SWITCH")) error(response, 503, "AI_DISABLED");
+                else error(response, 503, "DEPENDENCY_UNAVAILABLE");
+                assertThat(db.queryForObject("SELECT count(*) FROM ticket", Integer.class)).isZero();
             } finally { release.countDown(); entered = null; release = null; }
         }
     }

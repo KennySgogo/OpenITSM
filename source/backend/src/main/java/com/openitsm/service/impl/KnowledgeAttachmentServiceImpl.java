@@ -2,7 +2,6 @@ package com.openitsm.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.openitsm.common.exception.BusinessException;
-import com.openitsm.common.utils.Values;
 import com.openitsm.config.AttachmentConfig;
 import com.openitsm.dto.UploadKnowledgeAttachmentRequest;
 import com.openitsm.entity.KnowledgeAttachmentEntity;
@@ -12,7 +11,6 @@ import com.openitsm.mapper.KnowledgeAttachmentMapper;
 import com.openitsm.mapper.KnowledgeArticleMapper;
 import com.openitsm.mapper.UserMapper;
 import com.openitsm.service.AuthContext;
-import com.openitsm.service.IdempotencyService;
 import com.openitsm.service.SessionService;
 import com.openitsm.service.KnowledgeAttachmentService;
 import com.openitsm.vo.ActionVO;
@@ -43,28 +41,21 @@ public class KnowledgeAttachmentServiceImpl implements KnowledgeAttachmentServic
     private final KnowledgeAttachmentMapper attachments;
     private final KnowledgeArticleMapper articles;
     private final UserMapper users;
-    private final IdempotencyService idem;
     private final SessionService sessions;
     private final Clock clock;
     private final Path root;
 
     public KnowledgeAttachmentServiceImpl(KnowledgeAttachmentMapper attachments, KnowledgeArticleMapper articles, UserMapper users,
-        IdempotencyService idem, SessionService sessions, Clock clock, AttachmentConfig config) throws IOException {
-        this.attachments = attachments; this.articles = articles; this.users = users; this.idem = idem;
+        SessionService sessions, Clock clock, AttachmentConfig config) throws IOException {
+        this.attachments = attachments; this.articles = articles; this.users = users;
         this.sessions = sessions; this.clock = clock;
         Files.createDirectories(config.root().resolve("knowledge"));
         this.root = config.root().resolve("knowledge").toRealPath();
     }
 
-    public boolean storageReady() {
-        return Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && Files.isReadable(root) && Files.isWritable(root);
-    }
-
     @Override
     @Transactional
-    public ActionVO upload(AuthContext context, UUID articleId, UploadKnowledgeAttachmentRequest body, String version, String key) {
-        long expectedVersion = Values.version(version);
-        UUID requestKey = idem.key(key);
+    public ActionVO upload(AuthContext context, UUID articleId, UploadKnowledgeAttachmentRequest body) {
         var file = body.file();
         if (file == null || file.isEmpty()) throw BusinessException.field("file", "请选择非空文件");
         if (file.getSize() > (100L * 1024 * 1024)) throw tooLarge();
@@ -83,19 +74,13 @@ public class KnowledgeAttachmentServiceImpl implements KnowledgeAttachmentServic
             contentHash = HexFormat.of().formatHex(digest.digest());
         } catch (IOException ex) { throw unavailable(); }
         catch (NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
-        String operation = "POST /api/v1/knowledge-articles/" + articleId + "/attachments";
-        String hash = idem.hash(Map.of("fileName", originalName, "contentHash", contentHash), version);
         UUID actorId = context.user().id;
-        idem.reserve(actorId, operation, requestKey);
         var actor = users.lock(actorId);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
         var article = articles.lock(articleId);
         requireVisible(actor, article);
         requireAuthor(actor, article);
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
-        if (article.version != expectedVersion) throw new BusinessException(409, "VERSION_CONFLICT", "知识已更新，请刷新后重试");
         requireDraft(article);
         var attachment = new KnowledgeAttachmentEntity();
         attachment.id = UUID.randomUUID(); attachment.articleId = articleId; attachment.uploaderId = actorId;
@@ -122,7 +107,7 @@ public class KnowledgeAttachmentServiceImpl implements KnowledgeAttachmentServic
         article.version++; article.updatedAt = clock.instant();
         articles.updateById(article);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, articleId, article.version, 200);
+        return new ActionVO(articleId);
     }
 
     @Override
@@ -176,27 +161,21 @@ public class KnowledgeAttachmentServiceImpl implements KnowledgeAttachmentServic
     }
     @Override
     @Transactional
-    public ActionVO remove(AuthContext context, UUID articleId, UUID attachmentId, String version, String key) {
-        long expected = Values.version(version);
-        UUID requestKey = idem.key(key), actorId = context.user().id;
-        String operation = "DELETE /api/v1/knowledge-articles/" + articleId + "/attachments/" + attachmentId;
-        String hash = idem.hash(null, version);
-        idem.reserve(actorId, operation, requestKey);
+    public ActionVO remove(AuthContext context, UUID articleId, UUID attachmentId) {
+        UUID actorId = context.user().id;
         var actor = users.lock(actorId);
         if (actor == null || !"ACTIVE".equals(actor.status) || actor.authVersion != context.session().authVersion())
             throw new BusinessException(401, "SESSION_EXPIRED", "会话已失效，请重新登录");
         var article = articles.lock(articleId);
         requireVisible(actor, article); requireAuthor(actor, article);
-        var previous = idem.replay(actorId, operation, requestKey, hash);
-        if (previous != null) return previous;
-        if (article.version != expected) throw new BusinessException(409, "VERSION_CONFLICT", "知识已更新，请刷新后重新确认");
         requireDraft(article);
         var item = attachments.selectById(attachmentId);
-        if (item == null || item.removedAt != null || !articleId.equals(item.articleId)) throw missing();
+        if (item == null || !articleId.equals(item.articleId)) throw missing();
+        if (item.removedAt != null) return new ActionVO(articleId);
         item.removedAt = clock.instant(); item.removedBy = actorId; attachments.updateById(item);
         article.version++; article.updatedAt = clock.instant(); articles.updateById(article);
         sessions.touch(context.session().hash());
-        return idem.save(actorId, operation, requestKey, hash, articleId, article.version, 200);
+        return new ActionVO(articleId);
     }
     private BusinessException missing() { return new BusinessException(404, "RESOURCE_NOT_FOUND", "附件或知识不存在或不可访问"); }
     private BusinessException unavailable() { return new BusinessException(503, "DEPENDENCY_UNAVAILABLE", "附件存储暂不可用，请稍后重试"); }

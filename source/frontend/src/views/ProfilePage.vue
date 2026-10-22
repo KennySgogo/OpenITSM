@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import ErrorNotice from '../components/ErrorNotice.vue';
-import { request, type RequestOptions } from '../api/HttpClient';
+import { request } from '../api/HttpClient';
 import { restoreSession, clearSession } from '../stores/SessionStore';
 import { useFeedback } from '../composables/useFeedback';
 import { passwordIssues } from '../utils/Policy';
@@ -13,7 +13,6 @@ const profile = ref<Profile>();
 const form = reactive({ name: '', skillsDescription: '' });
 const passwords = reactive({ oldPassword: '', password: '', confirmPassword: '' });
 const message = ref('');
-let pending: RequestOptions | undefined;
 async function load() {
   const value = await request<Profile>('/profile');
   profile.value = value;
@@ -21,21 +20,17 @@ async function load() {
 }
 async function refresh() {
   busy.value = true; error.value = undefined;
-  try { await load(); pending = undefined; }
+  try { await load(); }
   catch (value) { showError(value); }
   finally { busy.value = false; }
 }
 async function save() {
   if (blocked.value || !profile.value) return;
   busy.value = true; error.value = undefined; message.value = '';
-  pending ??= { method: 'PATCH', body: { ...form }, version: profile.value.version, key: crypto.randomUUID() };
   try {
-    await request('/profile', pending); pending = undefined;
+    await request('/profile', { method: 'PATCH', body: { ...form } });
     await Promise.all([load(), restoreSession()]); message.value = '资料已保存';
-  } catch (value) {
-    showError(value);
-    if (error.value!.status >= 400 && error.value!.status < 500 && !['REQUEST_IN_PROGRESS', 'RATE_LIMITED'].includes(error.value!.code)) pending = undefined;
-  }
+  } catch (value) { showError(value); }
   finally { busy.value = false; }
 }
 async function changePassword() {
@@ -56,9 +51,9 @@ onMounted(refresh);
   <ElAlert v-if="message" :title="message" type="success" :closable="false" />
   <ElCard v-if="profile" style="max-width:720px;margin-bottom:24px">
     <ElForm label-position="top" @submit.prevent="save">
-      <ElFormItem label="姓名"><ElInput v-model="form.name" :disabled="!!pending" maxlength="80" /></ElFormItem>
-      <ElFormItem label="技能描述"><ElInput v-model="form.skillsDescription" :disabled="!!pending" type="textarea" :rows="5" /></ElFormItem>
-      <ElButton type="primary" native-type="submit" :loading="busy" :disabled="blocked">{{ pending ? '重试原资料保存' : '保存资料' }}</ElButton>
+      <ElFormItem label="姓名"><ElInput v-model="form.name" :disabled="busy" maxlength="80" /></ElFormItem>
+      <ElFormItem label="技能描述"><ElInput v-model="form.skillsDescription" :disabled="busy" type="textarea" :rows="5" /></ElFormItem>
+      <ElButton type="primary" native-type="submit" :loading="busy" :disabled="blocked">{{ '保存资料' }}</ElButton>
       <ElButton :disabled="busy" @click="refresh">重新读取</ElButton>
     </ElForm>
   </ElCard>

@@ -14,7 +14,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
@@ -25,18 +24,16 @@ public class TicketAttachmentController {
     public TicketAttachmentController(TicketAttachmentService service) { this.service = service; }
 
     @PostMapping(value = "/api/v1/tickets/{id}/attachments", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<?> upload(@PathVariable UUID id, MultipartHttpServletRequest request,
-        @RequestHeader(value = "If-Match", required = false) String version,
-        @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+    public ResponseEntity<?> upload(@PathVariable UUID id, MultipartHttpServletRequest request) {
         if (request.getMultiFileMap().size() != 1 || request.getFiles("file").size() != 1
             || request.getParameterMap().size() != 1 || request.getParameterValues("visibility") == null
             || request.getParameterValues("visibility").length != 1)
             throw BusinessException.field("file", "请仅提供一个 file 文件和一个 visibility 字段");
         var result = service.upload(RequestAuthentication.from(request), id,
-            new UploadTicketAttachmentRequest(request.getFile("file"), request.getParameter("visibility")), version, key,
+            new UploadTicketAttachmentRequest(request.getFile("file"), request.getParameter("visibility")),
             UUID.fromString((String) request.getAttribute("requestId")));
-        var response = ResponseEntity.ok().eTag("\"" + result.acceptedVersion() + "\"");
-        if (result.replayed()) response.header("Idempotent-Replayed", "true");
+        var response = ResponseEntity.ok();
+
         return response.body(ApiResponse.of(request, result));
     }
 
