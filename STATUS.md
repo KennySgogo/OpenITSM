@@ -1,11 +1,33 @@
 # OpenITSM 开发状态
 
-> 更新日期：2026-10-22（Asia/Ulaanbaatar）
+> 更新日期：2026-10-23（Asia/Ulaanbaatar）
 > 本文只记录进度、验证结果和问题。产品需求见 [PRD.md](./PRD.md)，架构规范见 [ARCHITECTURE.md](./ARCHITECTURE.md)，接口规格见 [API.md](./API.md)。
 
-## 当前任务：M09 阶段 C 提单前建议（2026-10-22）
+## 当前任务：M10 处理人推荐（2026-10-23）
 
-阶段 C 已实施并完成本轮验收，未提交或推送；M10～M12 未扩展。新增创建前建议接口与严格输入 DTO，复用现有 Java Service 和 Python 内部计算接口。创建页独立加载及报错，手动采用才填入类型；输入或手选类型变化、提交和页面卸载均使旧结果失效，AI 等待不阻塞人工建单。
+已完成创建前与详情页推荐及本轮验收，当前停在 M10 供检查；M11/M12 待后续开发。创建前全部有效成员可用，详情页限工程师/管理员，推荐不扩大分派权限。Java 仅提供公开问题、当前有效 ENGINEER/ADMIN 的同业务类型 RESOLVED/CLOSED 数量、未结束负载及技能，不提供历史正文或账号信息。Python 使用现有 Chat Completions/Pydantic 校验最多 3 名唯一候选与简短理由；Java 返回前复核配置、会话、类型及候选资格，补充当前姓名。无需数据库迁移。
+
+交付范围：M10 代码、测试、API/架构/运行说明及前轮尚未提交的状态文档一并纳入本次提交，目标为 `origin/main` 和 `origin/codex/account-mail`，具体版本以 Git 记录为准。`plan.md` 既有修改、本机 `.local/`、前端 `.vite/`、凭据和构建产物不纳入提交；下方本机日志与截图不随远程仓库提供。
+
+- 新增 AssigneeRecommendationController、Service/Impl、Request、VO；复用 UserMapper 与 TicketMapper，增加按业务类型统计经验的查询。推荐只更新已有 AI 调用状态，不建单、不分派或通知；最终写入仍由 M02/M03 事务校验。
+- 前端共用 AssigneeRecommendations：创建页采用后才填入负责人；详情页采用后打开现有分派/转派确认框。输入、手选负责人、提交或页面卸载使过时结果失效；AI 等待/失败不阻断人工流程。
+- 专项真实 HTTP/PostgreSQL 14 项（M09 与新增 M10）、前端 28 项测试、类型检查和构建、Python 18 项测试通过。首次完整 mvn verify 在后段因测试 PostgreSQL 连接中断，129 项中 2 项 ApplicationContext 环境错误、0 断言失败；随后独立打包成功，完整 `mvn -o -B test` 重跑 154 项全部通过、无失败/错误/跳过。
+- 最新 JAR、FastAPI 与 Vite 已在默认 8080/8001/5173 启动并连接授权主数据库。内置浏览器详情真实模型返回 3 名候选，采用本地管理员后需再次确认；确认后 ITSM-9 更新负责人并保留分派记录。创建前维修样例两次真实请求超时，输入保留，人工选择本地管理员后成功创建 ITSM-43/P3。主库由 10 张工单/68 条业务记录/13 条邮件任务变为 11/70/13，变化对应一次人工分派和一次人工建单，无新增邮件任务。
+- 创建前开发类型样例真实模型成功返回 3 人；生成时负责人仍为空，人工采用“堂大炮”后仅填入负责人，初始 P3 不变，未自动建单。该草稿留在内置浏览器，未提交；页面截图与主库降级建单结果分别保留。
+- 员工/工程师接口由隔离 PostgreSQL 覆盖；主库页面使用已提供管理员账号。真实供应商耗时稳定性、完整逐角色页面回归及既有窄屏遮挡仍待专项处理；没有为超时增加自动重试或放宽限制。plan.md 与既有本机文件未修改，之前未提交文档改动保留。
+
+本机日志：`.local/m10-backend-tests.log`、`m10-verify.log`、`m10-tests-retry.log`、`m10-package.log`、`m10-frontend-tests-final.log`、`m10-frontend-build-final.log`、`m10-python-tests-final.log`；截图见前端 verification/RESULTS.md，均未提交。
+
+## 前一轮：M09 阶段 C 提单前建议（2026-10-22）
+
+阶段 C 已实施并完成本轮验收；M10～M12 未扩展。新增创建前建议接口与严格输入 DTO，复用现有 Java Service 和 Python 内部计算接口。创建页独立加载及报错，手动采用才填入类型；输入或手选类型变化、提交和页面卸载均使旧结果失效，AI 等待不阻塞人工建单。
+
+### 提交与交付状态
+
+- 清理、AI 直接调用、阶段 C、相关测试和文档已提交为 `ac4e3b2`（Simplify technical mechanisms and add pre-create AI suggestions），并正常快进推送至 `origin/main` 和 `origin/codex/account-mail`；两分支远程提交已核对一致。
+- 本次提交共 122 个文件，新增 1,819 行、删除 2,502 行，净减少 683 行；这是 Git 整体差异，包含文档及测试，与下方分阶段生产代码统计范围不同。
+- `plan.md` 既有修改、`.local/` 本机数据/日志/截图、前端 `.vite/`、凭据及构建产物未纳入提交。下方本机证据路径需在验收机器查看，远程仓库不包含对应文件。
+- 阶段 C 交付时停下供检查；该阶段的剩余事项为窄屏遮挡、完整逐角色页面回归、真实模型长期稳定性/分类质量、邮箱收件箱送达及生产部署验证。后续 M10 完成情况见页首，M11/M12 仍待开发。
 
 - 完整后端 `mvn -o -B verify`：151 项通过、无失败/错误/跳过，最终 JAR 打包成功；前端 27 项测试、vue-tsc 类型检查及 Vite 构建通过；Python 16 项通过。新增覆盖三角色、输入/会话/CSRF、无候选、AI 关闭及在途配置/账号/类型变化；前端实际组件 setup/lifecycle 测试覆盖输入失效、乱序、手工覆盖、提交和卸载后的迟到结果。
 - 默认端口实际启动：前端 localhost:5173，最终 Spring Boot JAR 127.0.0.1:8080，最新 FastAPI 127.0.0.1:8001。经用户授权改用主数据库 openitsm，V18 应用成功；两封历史工单通知均已投递为 SUCCESS。既有两条 INVITE FAILED 历史任务仍保留，没有修改账号或收件人数据；SMTP 接受不代表收件箱送达确认。
@@ -17,6 +39,8 @@
 日志与截图：`.local/stage-c-20261022/` 下 backend-verify.log、frontend-tests.log、frontend-build.log、python-tests.log、main-after-suggestions.log、main-final.log、browser-before-adopt.png 和 browser-ticket-confirmed.png；页面验收记录见前端 verification/RESULTS.md。
 
 ## 前一轮：AI 直接调用与结果校验（2026-10-22）
+
+以下保留该轮验收时的状态；提交、主库切换及后续页面复验以页首阶段 C 记录为准。
 
 已按确认方案修改，未提交或推送。移除“先测试结构化能力才能生成”的前置门槛；Java 直接调用 Python，Python 使用普通 Chat Completions 并要求 JSON，保留 Pydantic 字段/类型候选/优先级/关系校验及 Java 当前权限、工单状态、配置和类型有效性复核。建议仍须人工确认，生成不改工单或优先级。
 
@@ -31,6 +55,8 @@
 日志：`.local/ai-direct-20261022/` 下 backend-verify.log、python-tests.log、frontend-tests.log、frontend-build.log、packaged-verify.log、live-acceptance.log 、current-ticket.log 和 line-counts.json。
 
 ## 前一轮：全项目技术冗余清理（2026-10-22）
+
+以下保留该轮验收时的状态；后续提交、V18 主库升级、邮件投递及阶段 C 完成情况以页首记录为准。
 
 已实际修改并验证；未提交或推送。业务模块及既有 Java 三层、Vue、FastAPI、PostgreSQL 架构保留，plan.md 未修改，AGENTS.md 保持任务开始时内容。
 
@@ -72,7 +98,7 @@
 
 日志集中在被忽略的 `.local/cleanup-20261022/`：backend-verified.log、package-final.log、frontend-tests-final.log、frontend-build-final.log、python-tests-final.log、packaged-ai-browser.log、live-acceptance.log、live-v17-upgrade.log、line-counts.json。日志不记录凭据。
 
-### 当前运行与剩余问题
+### 清理轮结束时的运行与剩余问题（历史）
 
 - 按用户要求保留前端 localhost:5173、后端 127.0.0.1:8080、AI 127.0.0.1:8001 运行。后端连接独立 openitsm_cleanup_test_80a017ca337644c08bd8f838c0576999 验收库，使用本机 SMTP 2525，避免误发原库积压邮件。验收账号为 cleanup-admin@example.com、cleanup-engineer@example.com、cleanup-employee@example.com；这些账号仅存在于隔离验收库，浏览器保留工程师验收会话。
 - 前一轮结构化能力测试失败导致建议不可用的问题已在页首本轮修复并以真实模型验证；此处旧阶段的协议及验证结论仅作历史记录。

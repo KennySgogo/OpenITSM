@@ -32,6 +32,19 @@ public class PythonAiClient {
 
     public record BusinessTypeCandidate(UUID id, String name, String description) {}
 
+    public record AssigneeCandidate(UUID id, String skillsDescription, long openCount, long resolvedCount) {}
+    public record Recommendation(UUID assigneeId, String reason) {}
+    public record Recommendations(java.util.List<Recommendation> items) {}
+
+    public Recommendations recommendAssignees(SettingsSnapshot.Model model, String title, String description,
+        String impactScope, String businessType, List<AssigneeCandidate> candidates) {
+        var result = invoke("/internal/v1/assignee-recommendations", Map.of("modelConnection", connection(model),
+            "ticket", Map.of("title", title, "description", description, "impactScope", impactScope, "businessType", businessType),
+            "candidates", candidates));
+        try { return json.treeToValue(result, Recommendations.class); }
+        catch (com.fasterxml.jackson.core.JacksonException | IllegalArgumentException ex) { throw invalid(); }
+    }
+
     public ClassificationSuggestionVO suggestClassification(SettingsSnapshot.Model model, String title, String description,
         String impactScope, List<BusinessTypeCandidate> candidates) {
         var types = candidates.stream().map(candidate -> {

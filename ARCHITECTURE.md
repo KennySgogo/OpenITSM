@@ -112,6 +112,8 @@ M02 创建使用统一类型 ID、可选负责人和初始优先级，复用原�
 
 建单前推荐复用 M10 的 Java → Python 计算边界，由独立建议请求接收当前四项表单信息，不创建临时工单。Java 负责会话、候选权限、类型校验与输出过滤；Python 不访问数据库，不自动分派。前后推荐共用候选按业务类型的已解决/关闭数量、当前未结束负载及技能描述，不发送历史正文；最终仅返回候选标识、姓名和简短理由。前端人工确认后才设置负责人，AI 失败不阻塞建单；不增加提单标签字段。
 
+AssigneeRecommendationController → Service/ServiceImpl → 既有 UserMapper/TicketMapper 提供前后推荐；不新增表或迁移。Python 使用现有普通 Chat Completions 和 Pydantic 动态候选校验，Java 补充姓名并复核当前资格。前端 AssigneeRecommendations 由创建页与工单操作区复用，局部请求序号丢弃过期结果；详情采用后打开现有分派/转派确认框，最终写入仍走原 M03 事务及通知。
+
 ### 列表检索扩展
 
 M05 扩展复用 TicketController/Service/Mapper 与现有分页：服务端将日期、人员、优先级及 lifecycle 转为有参数的查询条件，始终与可见范围、视图取交集；按 Asia/Shanghai 日期边界转换为时间范围，不对 created_at 逐行转文本比较。筛选选项由同一工单服务按可见数据和统一类型取回最小字段，不直接放开成员管理接口。ASSIGNED 默认未结束但支持历史切换；人员候选可含历史成员，不能与分派的 ACTIVE 角色校验混用。不为筛选引入搜索引擎或新架构层。
@@ -148,7 +150,7 @@ BrowserSecurityFilter 仅对精确工单/知识上传路径的 POST 放行 multi
 
 正文修改、附件上传/移除、发布和下架锁同一文章并递增同一 version，沿用成员行→文章行顺序；附件写入仅本人作者工程师且 DRAFT，已发布须先下架。读取时再次按文章当前状态、调用者角色及附件未移除条件授权，不复用工单权限或靠文件 URL 判断。原作者降为员工后不能读草稿；管理员仅阅读草稿及发布/下架，不因附件新功能获得作者上传权。正文保持纯文本，知识文件不提供给 Python 或 AI 检索。
 
-M09 已确认只使用业务类型，不增加平行分类或标签表/接口。Java 负责 NEW 提单人/负责人/管理员、IN_PROGRESS/ON_HOLD 负责人/管理员的权限状态检查；建议不写入，人工类型确认复用 TicketService 的成员→类型→工单协调、版本与审计。RESOLVED/CLOSED/REJECTED 不可修改；与受理、解决、转派及类型停用并发时必须最终重验。优先级继续走管理员专属 M03 动作，不通过分类接口绕过。
+M09 只使用业务类型，不增加平行分类或标签表/接口。提单前建议允许全部有效成员请求；详情页由 Java 检查 NEW 提单人/负责人/管理员、IN_PROGRESS/ON_HOLD 负责人/管理员的权限状态。建议不写入，人工类型确认复用 TicketService 的成员→类型→工单行锁协调及业务操作记录。RESOLVED/CLOSED/REJECTED 不可修改；与受理、解决、转派及类型停用并发时必须最终重验。优先级继续走管理员专属 M03 动作，不通过分类接口绕过。
 
 V15 为 ticket_type 新增可空 description，历史行保持空值；类型读写复用原 Service/Mapper 和权限。类型候选向 Python 同步提供可选说明，仍不发送内部备注或附件。
 
@@ -304,7 +306,7 @@ local 配置通过 Spring Boot Config Data 导入本机 `.env` properties 文件
 
 ### M14 Python 运行与配置持久化
 
-按用户指定复用本机 uv 管理的 Python 3.12.15，不另装新版解释器。source/ai-service 使用 pyproject.toml、uv.lock 与项目 .venv；运行版本范围 >=3.12,<3.14，此调整不改变 Java/Python 职责，也无历史 Python 服务迁移。app/main.py 提供固定文本模型连接测试与 M09 类型建议计算；无数据库、脚本执行或 M10～M12 占位接口。
+按用户指定复用本机 uv 管理的 Python 3.12.15，不另装新版解释器。source/ai-service 使用 pyproject.toml、uv.lock 与项目 .venv；运行版本范围 >=3.12,<3.14，此调整不改变 Java/Python 职责，也无历史 Python 服务迁移。app/main.py 提供固定文本模型连接测试、M09 类型建议与 M10 处理人推荐计算；无数据库、脚本执行或 M11～M12 占位接口。
 
 测试编排使用短事务完成管理员/会话校验、限频及 RUNNING 记录，再在事务外等待 Python，最后以 attempt_id 条件更新结果并重验权限；状态更新不递增配置版本，旧尝试不能覆盖更新尝试。显式清除用 MyBatis ALWAYS 更新空值，避免 null 被忽略而恢复旧凭据。
 

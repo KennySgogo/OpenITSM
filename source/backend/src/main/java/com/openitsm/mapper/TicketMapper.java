@@ -12,6 +12,8 @@ import org.apache.ibatis.annotations.Select;
 /** M02 persistence and the existing M01 membership/visibility queries. */
 @Mapper
 public interface TicketMapper extends BaseMapper<TicketEntity> {
+    @Select("SELECT count(*) FROM ticket WHERE assignee_id=#{userId} AND business_type_id=#{typeId} AND status IN ('RESOLVED','CLOSED')")
+    long countTypeExperience(@Param("userId") UUID userId, @Param("typeId") UUID typeId);
     @Select("SELECT bt.id,bt.name,bt.active FROM ticket_type bt WHERE bt.active OR EXISTS "
         + "(SELECT 1 FROM ticket t WHERE t.business_type_id=bt.id AND (CAST(#{actor} AS uuid) IS NULL OR t.requester_id=#{actor})) ORDER BY bt.name,bt.id")
     java.util.List<java.util.Map<String, Object>> filterTypes(@Param("actor") UUID employee);

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from '../components/ErrorNotice.vue';
+import AssigneeRecommendations from '../components/AssigneeRecommendations.vue';
 import { ApiError, request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { sessionState } from '../stores/SessionStore';
@@ -89,6 +90,16 @@ function selectFiles(event: Event) {
   const files = Array.from((event.target as HTMLInputElement).files ?? []);
   uploads.value = files.map(file => ({ file, visibility: 'PUBLIC', done: false, error: file.size < 1 || file.size > 10 * 1024 * 1024 ? '文件须为 1 字节～10 MiB' : '' }));
 }
+async function adoptAssignee(item: { assigneeId: string }) {
+  if (busy.value || uncertain.value || created.value) return;
+  const snapshot = JSON.stringify(model);
+  try {
+    assignees.value = (await request<{ items: Assignee[] }>('/users/assignees')).items;
+    if (!alive || busy.value || created.value || snapshot !== JSON.stringify(model)) return;
+    if (assignees.value.some(user => user.id === item.assigneeId)) model.assigneeId = item.assigneeId;
+    else candidateMessage.value = '推荐处理人已不可用，请重新选择。';
+  } catch (value) { showError(value); }
+}
 async function uploadFiles() {
   if (!created.value || uploadBusy.value) return;
   uploadBusy.value = true;
@@ -169,6 +180,7 @@ function another() {
         <p v-if="selectedType" class="selected-type-description">业务说明：{{ selectedType.description || '暂无说明' }}</p>
         <ElAlert v-if="typeNotice" :title="typeNotice" type="warning" :closable="false" />
         <ElFormItem label="初始优先级"><ElSelect v-model="model.priority"><ElOption v-for="value in ['P1','P2','P3','P4']" :key="value" :value="value" :label="value" /></ElSelect></ElFormItem>
+        <AssigneeRecommendations endpoint="/ai/assignee-recommendations" :body="{ title: model.title, description: model.description, businessTypeId: model.businessTypeId, impactScope: model.impactScope }" :invalidation-key="model.assigneeId ?? ''" :disabled="busy || uncertain || !model.title.trim() || !model.description.trim() || !model.businessTypeId || !model.impactScope.trim()" can-adopt @adopt="adoptAssignee" />
         <ElFormItem label="负责人（可不指定）"><ElSelect v-model="model.assigneeId" clearable placeholder="进入未分派队列"><ElOption v-for="user in assignees" :key="user.id" :value="user.id" :label="user.name" /></ElSelect><p>{{ candidateMessage }}</p></ElFormItem>
         <ElFormItem label="附件（单个不超过 10 MiB）"><input type="file" multiple :disabled="busy" @change="selectFiles" /></ElFormItem>
         <p v-for="(item, index) in uploads" :key="index">{{ item.file.name }} {{ item.error }}<ElSelect v-if="staff" v-model="item.visibility"><ElOption value="PUBLIC" label="公开" /><ElOption value="INTERNAL" label="内部" /></ElSelect></p>

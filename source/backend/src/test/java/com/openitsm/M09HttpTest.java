@@ -38,7 +38,7 @@ class M09HttpTest {
     static {
         try {
             PYTHON = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-            PYTHON.createContext("/internal/v1/classification-suggestions", exchange -> {
+            PYTHON.createContext("/internal/v1/", exchange -> {
                 CALLS.incrementAndGet();
                 requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 if (entered != null) entered.countDown();
@@ -135,6 +135,63 @@ class M09HttpTest {
     void enableAi() throws Exception {
         var result = call(admin, "PATCH", "/api/v1/settings", Map.of("aiEnabled", true), UUID.randomUUID().toString(), "\"0\"");
         assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+    }
+
+    @Test void m10AllRolesBeforeCreateAndStaffAfterCreateUseOnlyAuthorizedAggregates() throws Exception {
+        enableAi();
+        UUID historical = ticket("CLOSED");
+        db.update("UPDATE app_user SET skills_description='Network specialist' WHERE id=?", ownerId);
+        response = json.writeValueAsString(Map.of("items", List.of(Map.of("assigneeId", ownerId, "reason", "具有相关技能"))));
+        var body = Map.of("title", "Network issue", "description", "Public description", "businessTypeId", oldType, "impactScope", "Team");
+        long count = db.queryForObject("SELECT count(*) FROM ticket", Long.class);
+        long mail = db.queryForObject("SELECT count(*) FROM notification_task", Long.class);
+        for (var browser : List.of(admin, owner, employee)) {
+            var result = call(browser, "POST", "/api/v1/ai/assignee-recommendations", body, null, null);
+            assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+            assertThat(data(result).path("items").get(0).path("assigneeId").asText()).isEqualTo(ownerId.toString());
+        }
+        var materials = json.readTree(requestBody);
+        assertThat(materials.path("ticket").path("description").asText()).isEqualTo("Public description");
+        assertThat(materials.path("candidates").toString()).doesNotContain("email", "password", "Network unavailable");
+        var ownerMaterial = java.util.stream.StreamSupport.stream(materials.path("candidates").spliterator(), false)
+            .filter(node -> node.path("id").asText().equals(ownerId.toString())).findFirst().orElseThrow();
+        assertThat(ownerMaterial.path("resolvedCount").asLong()).isEqualTo(1);
+        assertThat(ownerMaterial.path("skillsDescription").asText()).isEqualTo("Network specialist");
+        assertThat(db.queryForObject("SELECT count(*) FROM ticket", Long.class)).isEqualTo(count);
+        assertThat(db.queryForObject("SELECT count(*) FROM notification_task", Long.class)).isEqualTo(mail);
+        error(call(employee, "POST", path(historical)+"/ai/assignee-recommendations", null, null, null), 403, "FORBIDDEN");
+        assertThat(call(other, "POST", path(historical)+"/ai/assignee-recommendations", null, null, null).statusCode()).isEqualTo(200);
+        error(call(other, "POST", path(historical)+"/assignments", Map.of("assigneeId", ownerId), null, null), 403, "FORBIDDEN");
+    }
+
+    @Test void m10RejectsInvalidInputAndForeignCandidatesWithoutChangingBusinessData() throws Exception {
+        enableAi();
+        var body = new HashMap<String,Object>(Map.of("title", "Issue", "description", "Description", "businessTypeId", oldType, "impactScope", "Team"));
+        body.put("candidates", List.of(ownerId));
+        error(call(employee, "POST", "/api/v1/ai/assignee-recommendations", body, null, null), 400, "VALIDATION_FAILED");
+        assertThat(CALLS.get()).isZero();
+        body.remove("candidates");
+        response = json.writeValueAsString(Map.of("items", List.of(Map.of("assigneeId", employeeId, "reason", "invalid"))));
+        error(call(employee, "POST", "/api/v1/ai/assignee-recommendations", body, null, null), 503, "AI_INVALID_RESPONSE");
+        db.update("UPDATE team_settings SET ai_enabled=false");
+        error(call(employee, "POST", "/api/v1/ai/assignee-recommendations", body, null, null), 503, "AI_DISABLED");
+    }
+
+    @Test void m10FiltersCandidateDisabledDuringModelWait() throws Exception {
+        enableAi();
+        response = json.writeValueAsString(Map.of("items", List.of(Map.of("assigneeId", ownerId, "reason", "skill"))));
+        entered = new CountDownLatch(1); release = new CountDownLatch(1);
+        var future = CompletableFuture.supplyAsync(() -> {
+            try { return call(employee, "POST", "/api/v1/ai/assignee-recommendations", Map.of("title", "Issue", "description", "Description", "businessTypeId", oldType, "impactScope", "Team"), null, null); }
+            catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+        try {
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            db.update("UPDATE app_user SET status='DISABLED' WHERE id=?", ownerId);
+        } finally { release.countDown(); }
+        var result = future.get(15, TimeUnit.SECONDS);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("items").size()).isZero();
     }
 
     @Test void manualConfirmationChecksRolesStateReplayAndNoPriorityOrMail() throws Exception {

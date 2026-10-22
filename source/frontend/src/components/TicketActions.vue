@@ -3,6 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from './ErrorNotice.vue';
+import AssigneeRecommendations from './AssigneeRecommendations.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { sessionState } from '../stores/SessionStore';
@@ -45,14 +46,18 @@ async function loadAssignees() {
   } catch (value) { showError(value); }
   finally { busy.value = false; }
 }
-function open(action: TicketOperation) {
+async function open(action: TicketOperation, suggestedId?: string) {
   if (blocked.value || props.refreshing || props.externalBlocked || !sessionState.session || !ticketOperations(props.ticket, sessionState.session.user).includes(action)) return;
   operation.value = action;
   Object.assign(model, { assigneeId: '', reason: '', summary: '', priority: props.ticket.priority });
 
   error.value = undefined;
   dialog.value = true;
-  if (choosingAssignee.value) void loadAssignees();
+  if (choosingAssignee.value) {
+    const ticketId = props.ticket.id;
+    await loadAssignees();
+    if (dialog.value && props.ticket.id === ticketId && operation.value === action && suggestedId && assignees.value.some(user => user.id === suggestedId)) model.assigneeId = suggestedId;
+  }
 }
 async function submit() {
   if (blocked.value || props.refreshing || props.externalBlocked || (choosingAssignee.value && !candidatesReady.value)) return;
@@ -78,6 +83,7 @@ async function submit() {
 
 <template>
   <section class="ticket-actions">
+    <AssigneeRecommendations v-if="sessionState.session && sessionState.session.user.role !== 'EMPLOYEE'" :endpoint="`/tickets/${ticket.id}/ai/assignee-recommendations`" :invalidation-key="`${ticket.version}:${model.assigneeId}:${dialog}`" :disabled="refreshing || busy || externalBlocked" :can-adopt="actions.includes('assignments') || actions.includes('transfers')" @adopt="open(actions.includes('assignments') ? 'assignments' : 'transfers', $event.assigneeId)" />
     <h3>工单操作</h3>
     <ErrorNotice v-if="!dialog" :error="error" />
     <div class="action-buttons"><ElButton v-for="action in actions" :key="action" :disabled="blocked || refreshing || externalBlocked" @click="open(action)">{{ ticketOperationLabels[action] }}</ElButton></div>
