@@ -3,11 +3,24 @@
 > 更新日期：2026-10-23（Asia/Ulaanbaatar）
 > 本文只记录进度、验证结果和问题。产品需求见 [PRD.md](./PRD.md)，架构规范见 [ARCHITECTURE.md](./ARCHITECTURE.md)，接口规格见 [API.md](./API.md)。
 
-## 当前任务：M10 处理人推荐（2026-10-23）
+## 当前任务：M11 相似问题检索（2026-10-23）
 
-已完成创建前与详情页推荐及本轮验收，当前停在 M10 供检查；M11/M12 待后续开发。创建前全部有效成员可用，详情页限工程师/管理员，推荐不扩大分派权限。Java 仅提供公开问题、当前有效 ENGINEER/ADMIN 的同业务类型 RESOLVED/CLOSED 数量、未结束负载及技能，不提供历史正文或账号信息。Python 使用现有 Chat Completions/Pydantic 校验最多 3 名唯一候选与简短理由；Java 返回前复核配置、会话、类型及候选资格，补充当前姓名。无需数据库迁移。
+M11 代码与本轮验收已完成，停在本模块供检查，M12 尚未开发。新增 SimilarIssueController、Service/Impl、Mapper、VO 和 TicketSimilarIssues，复用会话、配置、Python 客户端与 AI 调用状态；无需迁移或新依赖。本次交付包含 M11 代码、测试及相关文档，推送目标为 origin/main 和 origin/codex/account-mail，提交与远程同步结果以 Git 记录为准；plan.md 既有修改及本机产物不纳入提交。
 
-交付范围：M10 代码、测试、API/架构/运行说明及前轮尚未提交的状态文档一并纳入本次提交，目标为 `origin/main` 和 `origin/codex/account-mail`，具体版本以 Git 记录为准。`plan.md` 既有修改、本机 `.local/`、前端 `.vite/`、凭据和构建产物不纳入提交；下方本机日志与截图不随远程仓库提供。
+- 工程师/管理员在详情主动检索。PostgreSQL 按关键词召回最多 10 个已解决/关闭工单或已发布知识，Python 选择最多 5 项并说明相关性，Java 组装真实元数据和原文摘要。返回前复核会话、配置、当前问题及来源状态/内容，剔除重开、下架或内容变化的来源，伪造/重复来源报错。当前工单、未解决/拒绝单、草稿、内部备注和附件排除。
+- 完整 mvn verify 157 项通过并打包，0 失败/错误/跳过；专项 HTTP/PostgreSQL 17 项、前端 30 项测试、类型检查及构建、Python 20 项通过。完整回归首次因 Docker 停止失败，恢复现有 Docker/PostgreSQL 后重跑通过。新增覆盖权限、私密材料排除、空结果、伪造来源、AI 关闭及在途重开/下架；前端覆盖换单、刷新、版本变化及卸载后的迟到响应。
+- 最新 JAR、FastAPI、Vite 已在默认 8080/8001/5173 启动，连接授权主库。内置浏览器管理员通过 Java→Python→真实模型检索：无候选时明确显示暂无来源；既有合成验收 ITSM-9 人工受理、解决后，ITSM-43 成功命中 ITSM-9，显示真实解决摘要和相关理由，点击打开正确详情。停止 FastAPI 后显示不可用及请求编号，人工搜索仍正常，随后恢复 AI 服务。
+- 准备来源样例仅操作既有合成单 ITSM-9：NEW→IN_PROGRESS→RESOLVED，写入标明验收的公开摘要，业务记录 70→72。随后检索前后均为 11 张工单、72 条业务记录、13 条邮件任务、2 篇知识，ITSM-43 保持 NEW/version=0，ITSM-9 保持 RESOLVED/version=3，没有检索产生的业务写入或通知。
+- 工程师/员工权限、知识来源与下架过滤由真实 PostgreSQL HTTP 测试覆盖；尚未以工程师页面验收知识命中/跳转。关键词召回可能漏掉无共同片段的同义表达，大样本质量、供应商长期稳定性、完整逐角色页面回归和既有窄屏遮挡仍待专项验收；Vite 包体积告警保留。
+- 已同步 API、ARCHITECTURE、服务 README 和前端验收记录；PRD 需求未变，AGENTS、PRD、plan.md 未因 M11 修改。M10 已提交版本为 26fe9be，历史交付记录见下节。
+
+本机证据：.local/m11-verify-retry.log、m11-http-tests-final.log、m11-python-tests.log、m11-frontend-tests.log、m11-frontend-build.log；启动日志、主库只读核对和截图位于 .local/m11-runtime/，均未提交。
+
+## 前一轮：M10 处理人推荐（2026-10-23）
+
+已完成创建前与详情页推荐及本轮验收，该轮停在 M10 供检查；后续 M11 状态见页首，M12 待开发。创建前全部有效成员可用，详情页限工程师/管理员，推荐不扩大分派权限。Java 仅提供公开问题、当前有效 ENGINEER/ADMIN 的同业务类型 RESOLVED/CLOSED 数量、未结束负载及技能，不提供历史正文或账号信息。Python 使用现有 Chat Completions/Pydantic 校验最多 3 名唯一候选与简短理由；Java 返回前复核配置、会话、类型及候选资格，补充当前姓名。无需数据库迁移。
+
+M10 代码、测试、API/架构/运行说明及前轮状态文档已提交为 `26fe9be`（Add AI assignee recommendations and sync project status），该轮已推送至 `origin/main` 和 `origin/codex/account-mail`。`plan.md` 既有修改、本机 `.local/`、前端 `.vite/`、凭据和构建产物不纳入提交；下方本机日志与截图不随远程仓库提供。
 
 - 新增 AssigneeRecommendationController、Service/Impl、Request、VO；复用 UserMapper 与 TicketMapper，增加按业务类型统计经验的查询。推荐只更新已有 AI 调用状态，不建单、不分派或通知；最终写入仍由 M02/M03 事务校验。
 - 前端共用 AssigneeRecommendations：创建页采用后才填入负责人；详情页采用后打开现有分派/转派确认框。输入、手选负责人、提交或页面卸载使过时结果失效；AI 等待/失败不阻断人工流程。
@@ -27,7 +40,7 @@
 - 清理、AI 直接调用、阶段 C、相关测试和文档已提交为 `ac4e3b2`（Simplify technical mechanisms and add pre-create AI suggestions），并正常快进推送至 `origin/main` 和 `origin/codex/account-mail`；两分支远程提交已核对一致。
 - 本次提交共 122 个文件，新增 1,819 行、删除 2,502 行，净减少 683 行；这是 Git 整体差异，包含文档及测试，与下方分阶段生产代码统计范围不同。
 - `plan.md` 既有修改、`.local/` 本机数据/日志/截图、前端 `.vite/`、凭据及构建产物未纳入提交。下方本机证据路径需在验收机器查看，远程仓库不包含对应文件。
-- 阶段 C 交付时停下供检查；该阶段的剩余事项为窄屏遮挡、完整逐角色页面回归、真实模型长期稳定性/分类质量、邮箱收件箱送达及生产部署验证。后续 M10 完成情况见页首，M11/M12 仍待开发。
+- 阶段 C 交付时停下供检查；该阶段的剩余事项为窄屏遮挡、完整逐角色页面回归、真实模型长期稳定性/分类质量、邮箱收件箱送达及生产部署验证。后续 M10/M11 完成情况见上方，M12 仍待开发。
 
 - 完整后端 `mvn -o -B verify`：151 项通过、无失败/错误/跳过，最终 JAR 打包成功；前端 27 项测试、vue-tsc 类型检查及 Vite 构建通过；Python 16 项通过。新增覆盖三角色、输入/会话/CSRF、无候选、AI 关闭及在途配置/账号/类型变化；前端实际组件 setup/lifecycle 测试覆盖输入失效、乱序、手工覆盖、提交和卸载后的迟到结果。
 - 默认端口实际启动：前端 localhost:5173，最终 Spring Boot JAR 127.0.0.1:8080，最新 FastAPI 127.0.0.1:8001。经用户授权改用主数据库 openitsm，V18 应用成功；两封历史工单通知均已投递为 SUCCESS。既有两条 INVITE FAILED 历史任务仍保留，没有修改账号或收件人数据；SMTP 接受不代表收件箱送达确认。

@@ -32,6 +32,18 @@ public class PythonAiClient {
 
     public record BusinessTypeCandidate(UUID id, String name, String description) {}
 
+    public record SimilarSource(String sourceKey, String title, String text) {}
+    public record SimilarMatch(String sourceKey, String reason) {}
+    public record SimilarMatches(List<SimilarMatch> items) {}
+
+    public SimilarMatches similarIssues(SettingsSnapshot.Model model, String title, String description,
+        String businessType, List<SimilarSource> sources) {
+        var result = invoke("/internal/v1/similar-issues", Map.of("modelConnection", connection(model),
+            "ticket", Map.of("title", title, "description", description, "businessType", businessType), "sources", sources));
+        try { return json.treeToValue(result, SimilarMatches.class); }
+        catch (com.fasterxml.jackson.core.JacksonException | IllegalArgumentException ex) { throw invalid(); }
+    }
+
     public record AssigneeCandidate(UUID id, String skillsDescription, long openCount, long resolvedCount) {}
     public record Recommendation(UUID assigneeId, String reason) {}
     public record Recommendations(java.util.List<Recommendation> items) {}

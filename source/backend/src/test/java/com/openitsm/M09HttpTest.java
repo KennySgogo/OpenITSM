@@ -194,6 +194,79 @@ class M09HttpTest {
         assertThat(data(result).path("items").size()).isZero();
     }
 
+    UUID knowledge(String state, String content) {
+        UUID id = UUID.randomUUID();
+        db.update("INSERT INTO knowledge_article(id,title,content,category,status,author_id,created_at,updated_at,published_at) VALUES (?, 'VPN连接失败处理',?,'Network',?,?,now(),now(),CASE WHEN ?='PUBLISHED' THEN now() ELSE NULL END)", id, content, state, ownerId, state);
+        return id;
+    }
+
+    Object matches(UUID ticket, UUID article) {
+        return Map.of("items", List.of(Map.of("sourceKey", "TICKET:"+ticket, "reason", "相同连接问题"),
+            Map.of("sourceKey", "KNOWLEDGE:"+article, "reason", "包含处理方法")));
+    }
+
+    @Test void m11RecallsRealSourcesAndExcludesPrivateUnpublishedAndUnresolvedContent() throws Exception {
+        enableAi();
+        UUID current = ticket("NEW"), solved = ticket("RESOLVED"), rejected = ticket("NEW"), unresolved = ticket("NEW");
+        db.update("UPDATE ticket SET title='VPN连接失败',description='REJECTED_SENTINEL',status='REJECTED',rejection_reason='拒绝',rejected_at=now() WHERE id=?", rejected);
+        db.update("UPDATE ticket SET title='VPN连接失败',description='UNRESOLVED_SENTINEL' WHERE id=?", unresolved);
+        db.update("UPDATE ticket SET title='VPN连接失败',description='VPN连接失败' WHERE id=?", current);
+        db.update("UPDATE ticket SET title='VPN连接失败',description='公开连接问题',resolution_summary='更新 VPN 证书后连接成功' WHERE id=?", solved);
+        UUID published = knowledge("PUBLISHED", "VPN连接失败时更新客户端证书");
+        UUID draft = knowledge("DRAFT", "DRAFT_PRIVATE_SENTINEL VPN连接失败");
+        db.update("INSERT INTO ticket_reply(id,ticket_id,author_id,content,visibility,created_at) VALUES (?,?,?,'INTERNAL_SENTINEL VPN连接失败','INTERNAL',now())", UUID.randomUUID(), solved, ownerId);
+        response = json.writeValueAsString(matches(solved, published));
+        long audit = db.queryForObject("SELECT count(*) FROM audit_event", Long.class);
+        long mail = db.queryForObject("SELECT count(*) FROM notification_task", Long.class);
+        var result = call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("items").size()).isEqualTo(2);
+        assertThat(data(result).path("items").get(0).path("title").asText()).isEqualTo("VPN连接失败");
+        assertThat(requestBody).contains("更新 VPN 证书后连接成功").doesNotContain("DRAFT_PRIVATE_SENTINEL", "INTERNAL_SENTINEL", "REJECTED_SENTINEL", "UNRESOLVED_SENTINEL", draft.toString(), rejected.toString(), "TICKET:"+current);
+        assertThat(db.queryForObject("SELECT count(*) FROM audit_event", Long.class)).isEqualTo(audit);
+        assertThat(db.queryForObject("SELECT count(*) FROM notification_task", Long.class)).isEqualTo(mail);
+        assertThat(db.queryForObject("SELECT version FROM ticket WHERE id=?", Long.class, current)).isZero();
+        error(call(employee, "POST", path(current)+"/ai/similar-issues", null, null, null), 403, "FORBIDDEN");
+        assertThat(call(admin, "POST", path(current)+"/ai/similar-issues", null, null, null).statusCode()).isEqualTo(200);
+    }
+
+    @Test void m11EmptyMatchesAndInvalidSourcesRemainDistinctFromDisabledAi() throws Exception {
+        enableAi();
+        UUID current = ticket("NEW");
+        db.update("UPDATE ticket SET title='uniquexyz',description='uniquexyz' WHERE id=?", current);
+        var empty = call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null);
+        assertThat(empty.statusCode()).as(empty.body()).isEqualTo(200);
+        assertThat(data(empty).path("items").size()).isZero();
+        assertThat(CALLS.get()).isZero();
+        knowledge("PUBLISHED", "uniquexyz solution");
+        response = "{\"items\":[{\"sourceKey\":\"KNOWLEDGE:invented\",\"reason\":\"invented\"}]}";
+        error(call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null), 503, "AI_INVALID_RESPONSE");
+        response = "{\"items\":[]}";
+        assertThat(data(call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null)).path("items").size()).isZero();
+        db.update("UPDATE team_settings SET ai_enabled=false");
+        error(call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null), 503, "AI_DISABLED");
+    }
+
+    @Test void m11ReopenedTicketsAndUnpublishedKnowledgeAreRemovedBeforeReturning() throws Exception {
+        enableAi();
+        UUID current = ticket("NEW"), solved = ticket("CLOSED");
+        UUID published = knowledge("PUBLISHED", "Network unavailable solution");
+        response = json.writeValueAsString(matches(solved, published));
+        entered = new CountDownLatch(1); release = new CountDownLatch(1);
+        var future = CompletableFuture.supplyAsync(() -> {
+            try { return call(owner, "POST", path(current)+"/ai/similar-issues", null, null, null); }
+            catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+        try {
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            db.update("UPDATE ticket SET status='IN_PROGRESS' WHERE id=?", solved);
+            db.update("UPDATE knowledge_article SET status='DRAFT',published_at=NULL WHERE id=?", published);
+        } finally { release.countDown(); }
+        var result = future.get(15, TimeUnit.SECONDS);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("items").size()).isZero();
+    }
+
     @Test void manualConfirmationChecksRolesStateReplayAndNoPriorityOrMail() throws Exception {
         UUID id = ticket("NEW");
         String key = UUID.randomUUID().toString();

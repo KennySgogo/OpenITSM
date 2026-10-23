@@ -6,6 +6,8 @@ import TicketActions from '../components/TicketActions.vue';
 import TicketCommunication from '../components/TicketCommunication.vue';
 import TicketAttachments from '../components/TicketAttachments.vue';
 import TicketClassification from '../components/TicketClassification.vue';
+import TicketSimilarIssues from '../components/TicketSimilarIssues.vue';
+import { sessionState } from '../stores/SessionStore';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { ticketStatusLabels } from '../types/ApiTypes';
@@ -52,6 +54,7 @@ watch(() => route.params.id, () => load(), { immediate: true });
   </section>
   <TicketClassification v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked || attachmentLocked" @lock="classificationLocked = $event" @refresh="load(true)" />
   <TicketAttachments v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || communicationLocked || classificationLocked" @lock="attachmentLocked = $event" @refresh="load(true)" />
+  <TicketSimilarIssues v-if="ticket && sessionState.session && sessionState.session.user.role !== 'EMPLOYEE'" :key="ticket.id" :ticket="ticket" :refreshing="busy" />
   <TicketActions v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="communicationLocked || attachmentLocked || classificationLocked" @lock="actionLocked = $event" @refresh="load(true)" />
   <TicketCommunication v-if="ticket" :key="ticket.id" :ticket="ticket" :refreshing="busy" :external-blocked="actionLocked || attachmentLocked || classificationLocked" @lock="communicationLocked = $event" @refresh="load(true)" />
 </template>

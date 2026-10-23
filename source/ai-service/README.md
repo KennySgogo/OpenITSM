@@ -1,6 +1,6 @@
 # OpenITSM AI service
 
-Python 3.12.15、FastAPI、Pydantic、HTTPX。处理 M14 模型连接测试、M09 分类建议及 M10 处理人推荐，不访问数据库、不自动写入工单、不向浏览器开放调用。
+Python 3.12.15、FastAPI、Pydantic、HTTPX。处理 M14 模型连接测试、M09 分类建议、M10 处理人推荐及 M11 相似检索，不访问数据库、不自动写入工单、不向浏览器开放调用。
 
 ## 运行与测试
 
@@ -20,8 +20,9 @@ Python 3.12.15、FastAPI、Pydantic、HTTPX。处理 M14 模型连接测试、M0
 - POST /internal/v1/model-connection-tests：仅 modelConnection（baseUrl、model、apiKey），固定无业务数据短文本；仅返回 status。
 - POST /internal/v1/classification-suggestions：模型连接、公开工单问题、有效类型候选；返回 businessTypeId、reason、suggestedPriority。建议不自动生效。
 - POST /internal/v1/assignee-recommendations：模型连接、公开问题及 Java 提供的候选技能/负载/同类型解决数量；返回 items，最多 3 名唯一候选及简短理由，不自动分派。具体字段见根 API.md。
+- POST /internal/v1/similar-issues：模型连接、公开问题和 Java 召回的最多 10 个公开来源片段；返回最多 5 个唯一 sourceKey 和理由。Python 不访问数据库、不生成链接或摘要；Java 复核来源并组装真实元数据。
 
-模型 API 密钥仅用于供应商 Authorization，不进入提示词、日志和响应。输入验证错误不返回原始值。M11～M12 保持既定计划，尚未实现。
+模型 API 密钥仅用于供应商 Authorization，不进入提示词、日志和响应。输入验证错误不返回原始值。M12 回复草稿尚未实现。
 
 模型使用普通 Chat Completions，不要求先测试连接，不附加 JSON Schema 或工具调用参数。提示词要求仅返回 JSON，Pydantic 动态候选类型校验实际结果，拒绝额外/缺失字段、重复键、无效候选、截断和拒答；无输出修复、协议探测或自动重试。管理员连接测试只检查一次固定短文本的正常响应。
 
