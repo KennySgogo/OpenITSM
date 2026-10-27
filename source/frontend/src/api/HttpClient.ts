@@ -50,7 +50,7 @@ export async function request<T>(path: string, options: RequestOptions = {}, csr
     response = await fetch(`/api/v1${path}`, {
       method, credentials: 'include', headers,
       body: options.body === undefined ? undefined : multipart ? options.body as FormData : JSON.stringify(options.body),
-      signal: AbortSignal.timeout(multipart || options.binary ? 120000 : 20000)
+      signal: AbortSignal.timeout(multipart || options.binary ? 120000 : path.endsWith('/ai/reply-drafts') ? 40000 : 20000)
     });
   } catch {
     throw new ApiError(0, { code: 'NETWORK_ERROR', message: '无法连接服务，请检查网络后重试', retryable: true });

@@ -71,6 +71,8 @@ public class TicketCommunicationServiceImpl implements TicketCommunicationServic
             throw new BusinessException(403, "FORBIDDEN", "无操作权限");
         if (Set.of("CLOSED", "REJECTED").contains(ticket.status))
             throw new BusinessException(409, "INVALID_STATE", "工单已关闭，不能追加回复，请新建工单");
+        if (body.basedOnVersion() != null && body.basedOnVersion() != ticket.version)
+            throw new BusinessException(409, "INVALID_STATE", "草稿生成后工单已变化，请重新核对回复内容");
         var reply = new TicketReplyEntity();
         reply.id = UUID.randomUUID(); reply.ticketId = id; reply.authorId = actorId;
         reply.content = body.content().strip(); reply.visibility = internal ? "INTERNAL" : "PUBLIC";

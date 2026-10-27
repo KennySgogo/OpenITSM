@@ -3,6 +3,7 @@ import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import ErrorNotice from './ErrorNotice.vue';
+import TicketReplyDraft from './TicketReplyDraft.vue';
 import { request } from '../api/HttpClient';
 import { useFeedback } from '../composables/useFeedback';
 import { sessionState } from '../stores/SessionStore';
@@ -27,6 +28,12 @@ const staff = computed(() => ['ENGINEER', 'ADMIN'].includes(sessionState.session
 const permitted = computed(() => !!sessionState.session && canReply(props.ticket, sessionState.session.user, model.internal));
 const form = ref<FormInstance>();
 const model = reactive({ content: '', internal: false });
+const draftVersion = ref<number>();
+watch(() => model.content, value => { if (!value.trim()) draftVersion.value = undefined; }, { flush: 'sync' });
+function adoptDraft(content: string, version: number) {
+  if (model.content.trim() || props.refreshing || props.externalBlocked || busy.value || version !== props.ticket.version) return;
+  model.internal = false; model.content = content; draftVersion.value = version;
+}
 const rules: FormRules = { content: [{ required: true, whitespace: true, message: '请填写回复内容', trigger: 'blur' }] };
 watch(() => busy.value, value => emit('lock', value), { immediate: true });
 
@@ -78,7 +85,7 @@ async function submit() {
     if (!await form.value?.validate().catch(() => false)) return;
     error.value = undefined;
     await request<TicketAction>(`/tickets/${props.ticket.id}/${model.internal ? 'internal-notes' : 'replies'}`, {
-      method: 'POST', body: { content: model.content }
+      method: 'POST', body: { content: model.content, ...(draftVersion.value === undefined ? {} : { basedOnVersion: draftVersion.value }) }
     });
     if (!alive) return;
     ElMessage.success(model.internal ? '内部备注已添加' : '公开回复已发表');
@@ -112,6 +119,8 @@ async function submit() {
     <ElPagination v-if="replies && replies.total > replies.pageSize" :current-page="replyPage" :page-size="replies.pageSize" :total="replies.total" :disabled="repliesBusy" layout="total, prev, pager, next" @current-change="loadReplies($event)" />
     <div class="reply-editor">
       <ErrorNotice :error="error" />
+      <TicketReplyDraft v-if="staff" :ticket="ticket" :disabled="busy || refreshing || externalBlocked || ['CLOSED', 'REJECTED'].includes(ticket.status)" :has-reply-text="!!model.content.trim()" @adopt="adoptDraft" />
+      <p v-if="draftVersion !== undefined && draftVersion !== ticket.version" role="status">草稿对应的工单已变化，请保留文字并重新核对、生成；旧草稿不能直接发送。</p>
 
       <template v-if="ticket.status !== 'CLOSED'">
         <ElForm ref="form" :model="model" :rules="rules" label-position="top" :disabled="busy || refreshing || externalBlocked" @submit.prevent="submit">
@@ -121,7 +130,7 @@ async function submit() {
         </ElForm>
         <div class="submit-row"><ElButton type="primary" :loading="busy" :disabled="blocked || refreshing || externalBlocked || !permitted" @click="submit">{{ waitSeconds ? `${waitSeconds} 秒后重试` : model.internal ? '添加内部备注' : '发表公开回复' }}</ElButton></div>
       </template>
-      <p v-else class="muted">工单已关闭，不能追加回复。<RouterLink to="/tickets/new">新建工单</RouterLink></p>
+      <template v-else><p class="muted">工单已关闭，不能追加回复。<RouterLink to="/tickets/new">新建工单</RouterLink></p><ElInput v-if="model.content" v-model="model.content" aria-label="未发送的回复内容" type="textarea" :rows="4" readonly /></template>
     </div>
   </section>
   <section class="communication-card" aria-labelledby="operations-heading">

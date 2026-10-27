@@ -32,8 +32,10 @@ class M09HttpTest {
 
     static final AtomicInteger CALLS = new AtomicInteger();
     static volatile String response = "{}";
+    static volatile String draftResponse = "{\"content\":\"请确认网络连接情况。\"}";
     static volatile String requestBody = "";
     static volatile CountDownLatch entered, release;
+    static volatile boolean waitOnlyDraft;
     static final HttpServer PYTHON;
     static {
         try {
@@ -41,10 +43,11 @@ class M09HttpTest {
             PYTHON.createContext("/internal/v1/", exchange -> {
                 CALLS.incrementAndGet();
                 requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-                if (entered != null) entered.countDown();
-                try { if (release != null) release.await(10, TimeUnit.SECONDS); }
+                boolean shouldWait = !waitOnlyDraft || exchange.getRequestURI().getPath().endsWith("/reply-drafts");
+                if (entered != null && shouldWait) entered.countDown();
+                try { if (release != null && shouldWait) release.await(10, TimeUnit.SECONDS); }
                 catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
-                byte[] body = response.getBytes(StandardCharsets.UTF_8);
+                byte[] body = (exchange.getRequestURI().getPath().endsWith("/reply-drafts") ? draftResponse : response).getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, body.length);
                 exchange.getResponseBody().write(body); exchange.close();
@@ -85,7 +88,7 @@ class M09HttpTest {
         admin = signed("m09-admin@example.com"); employee = signed("m09-employee@example.com");
         owner = signed("m09-owner@example.com"); other = signed("m09-other@example.com"); stranger = signed("m09-stranger@example.com");
         oldType = TicketTypeTestSupport.type(db, "M09 Old"); newType = TicketTypeTestSupport.type(db, "M09 New");
-        CALLS.set(0); response = "{}"; requestBody = ""; entered = null; release = null;
+        CALLS.set(0); response = "{}"; draftResponse = "{\"content\":\"请确认网络连接情况。\"}"; requestBody = ""; entered = null; release = null; waitOnlyDraft = false;
     }
     UUID active(String email, String role) {
         var user = new UserEntity(); user.id = UUID.randomUUID(); user.emailNormalized = email;
@@ -192,6 +195,72 @@ class M09HttpTest {
         var result = future.get(15, TimeUnit.SECONDS);
         assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
         assertThat(data(result).path("items").size()).isZero();
+    }
+
+    @Test void m12DraftUsesAuthorizedSourcesAndDoesNotSendOrChangeTicket() throws Exception {
+        enableAi(); UUID current = ticket("NEW"), solved = ticket("RESOLVED");
+        UUID published = knowledge("PUBLISHED", "Network unavailable: check connection");
+        knowledge("DRAFT", "PRIVATE_DRAFT Network unavailable");
+        db.update("INSERT INTO ticket_reply(id,ticket_id,author_id,content,visibility,created_at) VALUES (?,?,?,'PRIVATE_NOTE','INTERNAL',now())", UUID.randomUUID(), solved, ownerId);
+        response = json.writeValueAsString(matches(solved, published));
+        long replies = db.queryForObject("SELECT count(*) FROM ticket_reply", Long.class);
+        long mail = db.queryForObject("SELECT count(*) FROM notification_task", Long.class);
+        long audit = db.queryForObject("SELECT count(*) FROM audit_event", Long.class);
+        var result = call(owner, "POST", path(current)+"/ai/reply-drafts", null, null, null);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("content").asText()).isEqualTo("请确认网络连接情况。");
+        assertThat(data(result).path("sources").size()).isEqualTo(2);
+        assertThat(data(result).path("hasReferenceSources").asBoolean()).isTrue();
+        assertThat(data(result).path("basedOnVersion").asLong()).isZero();
+        assertThat(requestBody).doesNotContain("PRIVATE_NOTE", "PRIVATE_DRAFT");
+        assertThat(db.queryForObject("SELECT count(*) FROM ticket_reply", Long.class)).isEqualTo(replies);
+        assertThat(db.queryForObject("SELECT count(*) FROM notification_task", Long.class)).isEqualTo(mail);
+        assertThat(db.queryForObject("SELECT count(*) FROM audit_event", Long.class)).isEqualTo(audit);
+        assertThat(db.queryForObject("SELECT version FROM ticket WHERE id=?", Long.class, current)).isZero();
+        error(call(employee, "POST", path(current)+"/ai/reply-drafts", null, null, null), 403, "FORBIDDEN");
+        db.update("UPDATE ticket SET status='CLOSED' WHERE id=?", current);
+        error(call(admin, "POST", path(current)+"/ai/reply-drafts", null, null, null), 409, "INVALID_STATE");
+    }
+
+    @Test void m12EmptySourcesAndStaleReplyAreHandledSeparately() throws Exception {
+        enableAi(); UUID current = ticket("NEW");
+        db.update("UPDATE ticket SET title='uniquexyz',description='uniquexyz' WHERE id=?", current);
+        var result = call(other, "POST", path(current)+"/ai/reply-drafts", null, null, null);
+        assertThat(result.statusCode()).as(result.body()).isEqualTo(200);
+        assertThat(data(result).path("hasReferenceSources").asBoolean()).isFalse();
+        assertThat(data(result).path("sources").size()).isZero();
+        assertThat(call(owner, "POST", path(current)+"/replies", Map.of("content", data(result).path("content").asText(), "basedOnVersion", 0), null, null).statusCode()).isEqualTo(200);
+        error(call(owner, "POST", path(current)+"/replies", Map.of("content", "draft", "basedOnVersion", 0), null, null), 409, "INVALID_STATE");
+        assertThat(call(owner, "POST", path(current)+"/replies", Map.of("content", "manual"), null, null).statusCode()).isEqualTo(200);
+        db.update("UPDATE team_settings SET ai_enabled=false");
+        error(call(owner, "POST", path(current)+"/ai/reply-drafts", null, null, null), 503, "AI_DISABLED");
+    }
+
+    @Test void m12RejectsChangesDuringGeneration() throws Exception {
+        for (String change : List.of("TICKET", "SOURCE", "SESSION", "CONFIG")) {
+            setUp(); enableAi(); UUID current = ticket("NEW"), solved = ticket("RESOLVED");
+            UUID published = knowledge("PUBLISHED", "Network unavailable: check connection");
+            response = json.writeValueAsString(matches(solved, published));
+            entered = new CountDownLatch(1); release = new CountDownLatch(1); waitOnlyDraft = true;
+            var future = CompletableFuture.supplyAsync(() -> {
+                try { return call(owner, "POST", path(current)+"/ai/reply-drafts", null, null, null); }
+                catch (Exception ex) { throw new RuntimeException(ex); }
+            });
+            try {
+                assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                switch (change) {
+                    case "TICKET" -> db.update("UPDATE ticket SET version=version+1 WHERE id=?", current);
+                    case "SOURCE" -> db.update("UPDATE knowledge_article SET status='DRAFT',published_at=NULL WHERE id=?", published);
+                    case "SESSION" -> db.update("UPDATE app_user SET status='DISABLED' WHERE id=?", ownerId);
+                    case "CONFIG" -> db.update("UPDATE team_settings SET ai_enabled=false WHERE ai_enabled=true");
+                }
+            } finally { release.countDown(); }
+            var result = future.get(15, TimeUnit.SECONDS);
+            if (change.equals("SESSION")) error(result, 401, "SESSION_EXPIRED");
+            else if (change.equals("CONFIG")) error(result, 503, "AI_DISABLED");
+            else error(result, 409, "INVALID_STATE");
+            entered = null; release = null; waitOnlyDraft = false;
+        }
     }
 
     UUID knowledge(String state, String content) {

@@ -1,11 +1,11 @@
 # OpenITSM API
 
-面向前端的接口文档。M01～M11 下列契约已接入源码，实际验收边界见 STATUS。M12 仍按设计稿维护；M13 统计接口随 M07 接入，M14 设置已接入。
+面向前端的接口文档。M01～M12 下列契约已接入源码，实际验收边界见 STATUS；M13 统计接口随 M07 接入，M14 设置已接入。
 
 - 后端基础地址（本地）：`http://127.0.0.1:8080`
 - 接口前缀：`/api/v1`
 - 当前已实现：认证、成员管理、内部提单（M02 前后端）、工单流转（M03 前后端）、回复/内部备注/附件/操作记录（M04 前后端）、列表详情与检索（M05 前后端）、简单统计（M07/M13）
-- M06 已接入账号邮件与工单通知的后台投递；M08～M11、M14 已接入，M12 仍为设计稿，M13 统计已接入。
+- M06 已接入账号邮件与工单通知的后台投递；M08～M12、M14 已接入，M13 统计已接入。
 
 ## 通用约定
 
@@ -533,7 +533,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 - 无命中 → 展示暂无相似来源 → 继续人工检索或直接处理；服务失败 → 显示错误及重试/人工入口，两种结果明确区分。
 - 来源变化：计算期间知识被下架或源工单重开 → 返回前重新检查 → 移除无效来源；用户后续点击仍通过真实详情接口校验，不靠缓存摘要绕过权限。
 
-### M12 AI 回复草稿（未实现）
+### M12 AI 回复草稿
 
 | 方法 | 路径 | 用途 | 调用角色 |
 | --- | --- | --- | --- |
@@ -544,14 +544,16 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 - 草稿不自动发送；人工核对修改后通过 M04 的 replies 发表，仅在用户当前页面保留。
 - AI 不可用时不影响人工直接回复。
 
-拟修改契约（已确认方向，尚未实现）：
+已实现契约：
 
 - 工程师/管理员可对可见 NEW/IN_PROGRESS/ON_HOLD/RESOLVED 生成草稿，不要求本人负责；CLOSED/REJECTED 返回 409 INVALID_STATE，非处理角色 403，工单不存在/不可见 404。请求由 Java 读取路径工单和 M11 授权候选，不接受客户端注入他人工单正文、系统提示或候选来源。
-- 生成不写工单、回复、审计或版本，不触发通知；拟返回 data 的 content、sources（sourceType/sourceId/number/title）及 basedOnVersion。sources 只允许真实授权来源，最多沿用 M11 的 5 项，不包含内部备注或任何附件；Java 返回前再次验证工单状态和来源可见性，必要时拒绝过时生成结果。
+- 生成不写工单、回复、审计或版本，不触发通知；返回 data 的 content、sources（sourceType/sourceId/number/title）、basedOnVersion 和 hasReferenceSources。sources 只允许真实授权来源，最多沿用 M11 的 5 项，不包含内部备注或任何附件；Java 返回前再次验证工单状态和来源可见性，过时生成结果返回 409 INVALID_STATE。
 - 草稿仅当前页面，服务端不保存业务草稿箱或增加草稿查询/恢复接口。用户编辑后经 M04 replies 发送，使用会话与 CSRF；不得把“生成草稿”视为已经回复或首次人工响应。生成期间工单变化则提示重新核对，不能自动拿新版本覆盖提交。
-- AI 关闭/超时/失败明确提示并保留人工回复入口，不发空草稿冒充成功。已确认无相似来源时可基于当前问题生成补充信息询问或一般建议，sources=[] 并明确标注“无参考来源”，不编造引用、历史案例或已验证结论；拟返回 hasReferenceSources=false 供页面明确展示，有来源时为 true。重新点击生成属于新的 AI 请求，不保证原结果重放，页面需避免自动重试导致重复调用。
+- AI 关闭/超时/失败明确提示并保留人工回复入口，不发空草稿冒充成功。已确认无相似来源时基于当前问题生成补充信息询问或一般建议，sources=[] 且 hasReferenceSources=false，页面标注“无参考来源”；有来源时为 true。模型被要求不编造引用和已验证结论，用户仍须核实。重新点击生成属于新的 AI 请求，不自动重试。
 
-功能链路（尚未实现）：
+- M11 召回和 M12 生成最多各调用一次模型，均使用现有连接与超时；当前问题及授权来源由 Java 提供，Python 返回最多 2000 字符的纯文本草稿。页面手动填入公开回复后，POST replies 附带 basedOnVersion，服务端在工单行锁内比较版本，变化时返回 409 INVALID_STATE 并保留文字；普通手工回复不需该字段。
+
+功能链路：
 
 - 工程师或管理员打开可回复的可见工单 → 主动生成 → Java 校验角色/状态并取得公开问题与授权来源 → Python 生成 → Java 核验来源及当前状态 → 页面显示可编辑草稿和真实来源 → 用户核对、修改 → 通过 M04 公开回复发送 → 成功后才生成正式回复及相应通知。
 - 已解决待确认：RESOLVED → 可生成并人工追加回复 → 状态仍 RESOLVED；已关闭/拒绝则禁止生成和发送。
@@ -606,7 +608,7 @@ GET `/api/v1/dashboard/metrics` 仅管理员可用。可选 createdFrom/createdT
 M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 - 纯计算建议/检索/草稿请求使用既有会话、Origin 和 CSRF，不写工单版本。人工应用业务类型、分派、回复仍各自带业务参数。页面提交中禁止重复点击，失败由用户主动重试，不自动重试外部生成；重新生成是新计算，不承诺恢复原草稿或原建议。
-- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，材料超限 503 AI_REQUEST_TOO_LARGE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。供应商认证、限流及请求拒绝按下文独立错误码返回。M09～M11 已接入配置与权限重验；M12 业务接口尚未实现，不将错误伪装成空结果。
+- 统一包裹响应及 requestId；AI 关闭返回 503 AI_DISABLED，缺配置 503 AI_NOT_CONFIGURED，输出结构/候选来源非法 503 AI_INVALID_RESPONSE，材料超限 503 AI_REQUEST_TOO_LARGE，Python/模型依赖故障 503 DEPENDENCY_UNAVAILABLE，有限等待超时 504 AI_TIMEOUT。供应商认证、限流及请求拒绝按下文独立错误码返回。M09～M12 已接入配置与权限重验，不将错误伪装成空结果。
 - Java 和 Python 设置有限连接/读写/总等待并及时取消，具体传输值在部署接入时校验；只回传可公开的错误说明，不回显密钥或原始供应商异常。AI 关闭阻止后续业务调用，已在途结果返回前重验开关/权限，关闭后不自动应用结果；管理员连接测试是独立例外。
 
 功能链路：
@@ -625,7 +627,7 @@ M09～M12 共用调用约定（业务入口随对应模块接入）：
 
 ## 内部接口（Java → Python，M09～M12 及 M14 模型测试）
 
-以下接口由 Java 后端调用 Python AI 服务，浏览器不可直接访问；不适用本文档的浏览器会话和统一响应包装。M14 固定文本测试、M09 类型建议、M10 处理人推荐与 M11 相似检索已接入；M12 仍为设计契约，材料范围和输出限制遵循对应模块，不可绕过 Java 权限和输出过滤。
+以下接口由 Java 后端调用 Python AI 服务，浏览器不可直接访问；不适用本文档的浏览器会话和统一响应包装。M14 固定文本测试与 M09～M12 AI 接口已接入，材料范围和输出限制遵循对应模块，不可绕过 Java 权限和输出过滤。
 
 | 方法 | 路径 | 用途 | 对应前端接口 |
 | --- | --- | --- | --- |
@@ -644,6 +646,8 @@ M09 直接生成与结果校验：
 M10 内部正文为 `{modelConnection,ticket:{title,description,impactScope,businessType},candidates:[{id,skillsDescription,openCount,resolvedCount}]}`。候选仅由 Java 从数据库组装，不含姓名、邮箱、历史正文或其他账号信息；模型凭据仅用于 HTTP Authorization。Python 返回 `{items:[{assigneeId,reason}]}`，不返回或生成姓名，Java 补充当前成员姓名。候选技能文本及工单内容均按不可信材料处理，沿用普通 Chat Completions、有限等待和严格 Pydantic 校验，不增加能力预检或自动重试。
 
 M11 内部正文为 `{modelConnection,ticket:{title,description,businessType},sources:[{sourceKey,title,text}]}`，最多 10 个 Java 授权来源；sourceKey 为 `TICKET:UUID` 或 `KNOWLEDGE:UUID`。Python 返回 `{items:[{sourceKey,reason}]}`，最多 5 个唯一的输入候选；无匹配返回空数组。动态枚举与 Pydantic 校验拒绝伪造来源、重复、额外字段或无效理由。Java 补充当前真实元数据和原文摘要，返回前剔除已变更的来源；不接收模型提供的 URL 或摘要。
+
+M12 内部正文为 `{modelConnection,ticket:{title,description,businessType},sources:[{sourceKey,title,text}]}`，sources 为 M11 选出的最多 5 项，也可为空。Python 只返回 `{content}`，严格校验非空、最长 2000 字符及无额外字段；Java 在返回前重验来源和工单版本。生成正文可能有误，发送前由用户核对。
 
 - 建议生成只要求 AI 开启、模型配置完整及当前用户/工单具备业务操作条件，无需先执行连接测试。测试未执行、失败或对应旧配置版本均不阻止生成。无候选直接返回三字段 null，不调用模型。
 - 管理员连接测试只发送一次固定短文本，不使用工单材料，不自动保存配置或启用 AI；测试结果是诊断信息。保留 testedVersion、occurredAt、current 和 attempt_id 对最新尝试的保护，不返回或传递 outputMode。
