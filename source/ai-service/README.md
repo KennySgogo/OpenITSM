@@ -30,4 +30,4 @@ Python 3.12.15、FastAPI、Pydantic、HTTPX。处理 M14 模型连接测试、M0
 
 错误区分 AI_PROVIDER_AUTH_FAILED、AI_PROVIDER_RATE_LIMITED、AI_PROVIDER_REQUEST_REJECTED、AI_TIMEOUT、AI_INVALID_RESPONSE 和 DEPENDENCY_UNAVAILABLE；日志只记录类别及供应商 HTTP 状态，不记录凭据、原始响应或工单材料。
 
-Java 请求最多 128 KiB，完整模型请求最多 256 KiB，模型响应最多 64 KiB；输出预算 1024 tokens。HTTPX 连接/读/写/连接池超时为 2/5/3/2 秒。超限明确返回错误，不截断业务候选。
+Java 请求最多 128 KiB，完整模型请求最多 256 KiB，模型响应最多 64 KiB；输出预算 1024 tokens。HTTPX 连接/读/写/连接池超时为 2/60/3/2 秒，单次模型请求总时限 65 秒。超限明确返回错误，不截断业务候选。

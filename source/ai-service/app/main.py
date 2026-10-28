@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, create_model, fiel
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 FIXED_TEST_TEXT = "Reply with OK. This is an OpenITSM connection test."
-TOTAL_TIMEOUT_SECONDS = 10
+TOTAL_TIMEOUT_SECONDS = 65
 MAX_RESPONSE_BYTES = 65536
 MAX_PROVIDER_REQUEST_BYTES = 262144
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ async def provider_completion(connection: ModelConnection, messages: list[dict[s
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     if len(encoded) > MAX_PROVIDER_REQUEST_BYTES:
         raise InternalError(503, "AI_REQUEST_TOO_LARGE")
-    timeout = httpx.Timeout(connect=2, read=5, write=3, pool=2)
+    timeout = httpx.Timeout(connect=2, read=60, write=3, pool=2)
     try:
         async with asyncio.timeout(TOTAL_TIMEOUT_SECONDS):
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:

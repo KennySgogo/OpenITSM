@@ -93,10 +93,10 @@ public class PythonAiClient {
                 || !("http".equals(target.getScheme()) && com.openitsm.service.impl.SettingsValidation.loopback(target.getHost()))) throw unavailable();
             String body = json.writeValueAsString(payload);
             if (body.getBytes(StandardCharsets.UTF_8).length > 131072) throw new BusinessException(503, "AI_REQUEST_TOO_LARGE", "AI 材料过大，请减少材料或人工选择");
-            var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(15)).header("Content-Type", "application/json")
+            var request = HttpRequest.newBuilder(target).timeout(Duration.ofSeconds(70)).header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body)).build();
             task = http.sendAsync(request, info -> new BoundedBodySubscriber());
-            var response = task.get(16, TimeUnit.SECONDS);
+            var response = task.get(71, TimeUnit.SECONDS);
             var result = json.readTree(response.body());
             if (response.statusCode() == 200) {
                 if (result == null || !result.isObject()) throw invalid();
