@@ -63,7 +63,7 @@ onMounted(refresh);
       <ElFormItem label="旧密码"><ElInput v-model="passwords.oldPassword" type="password" show-password autocomplete="current-password" /></ElFormItem>
       <ElFormItem label="新密码"><ElInput v-model="passwords.password" type="password" show-password autocomplete="new-password" /></ElFormItem>
       <ElFormItem label="确认新密码"><ElInput v-model="passwords.confirmPassword" type="password" show-password autocomplete="new-password" /></ElFormItem>
-      <p>12～64 个字符，至少包含字母和数字</p>
+      <p>至少 6 个字符</p>
       <ElButton native-type="submit" type="primary" :disabled="blocked || !passwords.oldPassword || !!passwordIssues(passwords.password, passwords.confirmPassword).length" :loading="busy">确认修改并退出登录</ElButton>
     </ElForm>
   </ElCard>

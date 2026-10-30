@@ -361,9 +361,9 @@ class M01IntegrationTest {
 
 
     @Test void passwordUnicodeAndUnsafeRedirectInputsAreChecked() throws Exception {
-        assertThatThrownBy(() -> Values.password("abcdefghijk", "abcdefghijk")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> Values.password("abcdefghijkl", "abcdefghijkl")).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> Values.password("123456789012", "123456789012")).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> Values.password("12345", "12345")).isInstanceOf(BusinessException.class);
+        assertThat(Values.password("abcdef", "abcdef")).isEqualTo("abcdef");
+        assertThat(Values.password("123456", "123456")).isEqualTo("123456");
         assertThatThrownBy(() -> Values.password(password, "Different1234")).isInstanceOf(BusinessException.class);
         assertThat(Values.password("中文密码包含字符长度１２３４５６", "中文密码包含字符长度１２３４５６")).isNotBlank();
         for (String path : List.of("//evil.example", "/\\evil.example", "/tickets?view=ALL", "/%2f%2fevil", "/dashboard#https://evil")) {

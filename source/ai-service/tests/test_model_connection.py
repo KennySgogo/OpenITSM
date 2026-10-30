@@ -56,7 +56,7 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(captured[0].content)
         self.assertTrue(payload["messages"][0]["content"].startswith(FIXED_TEST_TEXT))
         self.assertNotIn(SECRET, str(payload))
-        self.assertEqual(payload["max_tokens"], 16)
+        self.assertEqual(payload["max_tokens"], 1024)
         self.assertNotIn("response_format", payload)
         self.assertNotIn("tools", payload)
 

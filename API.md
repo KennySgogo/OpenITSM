@@ -189,14 +189,14 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 参数要点：
 
 - csrf：返回 64 字符 `csrfToken`；匿名会话 2 小时有效，过期后再调用换发新 Cookie 和新 token；已登录时返回当前登录会话的 token，Cookie 不变。
-- login：正文 email（去空格转小写，≤254 字符）、password（非空，≤64 码点）、可选 returnTo（站内路径，≤2048 字符）；成功换发会话与新 csrfToken，返回 user（含 id、name、email、role、status、version、lockedUntil）、defaultPath、redirectPath、absoluteExpiresAt、message。邮箱或密码错误、账号锁定（连续错 5 次锁 15 分钟）或已停用统一返回 401 AUTH_INVALID，前端不区分原因。
+- login：正文 email（去空格转小写，≤254 字符）、password（至少 6 个字符，不限制字符类型）、可选 returnTo（站内路径，≤2048 字符）；成功换发会话与新 csrfToken，返回 user（含 id、name、email、role、status、version、lockedUntil）、defaultPath、redirectPath、absoluteExpiresAt、message。邮箱或密码错误、账号锁定（连续错 5 次锁 15 分钟）或已停用统一返回 401 AUTH_INVALID，前端不区分原因。
 - defaultPath 按角色：ADMIN→/dashboard、ENGINEER→/tickets?view=ASSIGNED、EMPLOYEE→/tickets?view=MINE；工单列表已实现，看板接入 M07/M13 统计。
 - returnTo 校验（不通过则回退 defaultPath 并提示）：/knowledge、/tickets、/tickets/new、/tickets?view=MINE 全角色；/tickets?view=ASSIGNED、UNASSIGNED、ALL 非员工；/tickets/{id} 员工限本人工单，其他角色须工单存在；/dashboard、/admin/users、/settings 管理员。
 - me：Body 与 login 成功响应相同（redirectPath 恒等于 defaultPath）；401 时跳登录页并携带 returnTo。
 - activity：无正文，204；每 55～60 秒上报一次；同会话 60 秒内重复返回 429，忽略即可；只刷新无操作计时，不延长 absoluteExpiresAt；收到 401 停止上报并跳登录页。
 - logout：无正文，204；成功后清空本地状态并跳登录页；同一账号其他设备的会话不受影响。
 - password-reset-requests：正文 email；无论邮箱是否存在均返回 202 与统一文案，不得据此推断账号存在；邮件服务未配置返回通用 503。
-- password-resets：正文 token（43 字符，申请后 30 分钟有效，一次性）、password（12～64 字符，至少一个字母和一个数字）、confirmPassword（须与 password 一致）；成功后该账号全部会话失效，必须重新登录；token 不存在、已使用或已过期返回 409 TOKEN_INVALID。
+- password-resets：正文 token（43 字符，申请后 30 分钟有效，一次性）、password（至少 6 个字符，不限制字符类型）、confirmPassword（须与 password 一致）；成功后该账号全部会话失效，必须重新登录；token 不存在、已使用或已过期返回 409 TOKEN_INVALID。
 - activations：参数与密码规则同重置密码；邀请链接发出后 48 小时有效，重发邀请后旧链接失效；账号不处于待激活状态返回 409 TOKEN_INVALID。
 
 补齐契约：
@@ -209,7 +209,7 @@ token 与当前会话绑定：登录、重置密码等会换发会话，token �
 | GET | /api/v1/profile | 读取本人姓名与技能描述 | 全部登录角色 |
 | PATCH | /api/v1/profile | 修改本人姓名与技能描述 | 全部登录角色 |
 
-- password-changes 正文为 oldPassword、password、confirmPassword；只允许当前会话对应的本人，不接收 userId。新密码沿用 12～64 字符、至少字母和数字、二次输入一致的规则；旧密码错误或字段非法返回 400 VALIDATION_FAILED 并定位字段，会话失效仍为 401 SESSION_EXPIRED。使用现有 PasswordEncoder 校验/编码，校验失败不变更密码或会话；成功返回 204、清除当前 Cookie，并使本人全部会话失效。沿用改密对旧重置链接的失效处理；不在日志、审计中保存密码正文。
+- password-changes 正文为 oldPassword、password、confirmPassword；只允许当前会话对应的本人，不接收 userId。新密码至少 6 个字符，不限制字符类型，二次输入必须一致；旧密码错误或字段非法返回 400 VALIDATION_FAILED 并定位字段，会话失效仍为 401 SESSION_EXPIRED。使用现有 PasswordEncoder 校验/编码，校验失败不变更密码或会话；成功返回 204、清除当前 Cookie，并使本人全部会话失效。沿用改密对旧重置链接的失效处理；不在日志、审计中保存密码正文。
 - 改密使用会话与 CSRF，凭据校验与更新在成员锁内完成，避免与重置密码并发覆盖。成功后旧会话不可重放；响应丢失时先用新密码登录确认，不盲目自动重试原改密。复用现有限流机制，独立按成员 5 次/15 分钟及来源 60 次/分钟，超限沿用 429/Retry-After，不把旧密码输错累计为登录失败。
 - GET profile 返回本人 id、name、skillsDescription、version，不返回他人资料。PATCH 至少提供 name 或 skillsDescription，均为字符串：姓名去首尾空白后 1～80 字符，技能按纯文本、空串清空，整体沿用 256 KiB 限制；未知字段及 email/role/status/userId 均拒绝。事务内锁定本人记录后更新。
 - 资料更新返回 resourceId，前端重读本人资料和会话。姓名或技能改变不撤销会话。技能仅供 M10 对合法候选的推荐参考，不开放员工读取其他成员完整资料的接口。

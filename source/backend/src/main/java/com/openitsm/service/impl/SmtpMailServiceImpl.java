@@ -7,6 +7,8 @@ import jakarta.mail.MessagingException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class SmtpMailServiceImpl implements SmtpMailService {
+    private static final Logger log = LoggerFactory.getLogger(SmtpMailServiceImpl.class);
     private final JavaMailSender sender;
     private final AccountMailConfig config;
     private final com.openitsm.service.RuntimeSettingsService runtime;
@@ -38,6 +41,7 @@ public class SmtpMailServiceImpl implements SmtpMailService {
             throw new IllegalArgumentException("账号邮件参数无效");
         }
         String link = config.publicBaseUrl() + (invitation ? "/activate" : "/reset-password") + "?token=" + rawToken;
+        log.info("link:", link);
         String subject = invitation ? "邀请你加入 OpenITSM" : "重置你的 OpenITSM 密码";
         String body = "你好，\n\n" + (invitation ? "你受邀加入 OpenITSM。请打开以下链接设置登录密码：" : "请打开以下链接设置新的 OpenITSM 登录密码：")
             + "\n\n" + link + "\n\n链接自申请起 " + (invitation ? "48 小时" : "30 分钟")

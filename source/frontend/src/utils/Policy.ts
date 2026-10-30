@@ -1,8 +1,6 @@
 export function passwordIssues(password: string, confirm: string): string[] {
   const issues: string[] = [];
-  if ([...password].length < 12 || [...password].length > 64) issues.push('12～64 个字符');
-  if (!/\p{L}/u.test(password)) issues.push('至少包含一个字母');
-  if (!/\p{Nd}/u.test(password)) issues.push('至少包含一个数字');
+  if ([...password].length < 6) issues.push('至少 6 个字符');
   if (password !== confirm) issues.push('两次密码必须一致');
   return issues;
 }

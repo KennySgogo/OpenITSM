@@ -47,11 +47,15 @@ public class SettingsServiceImpl implements SettingsService {
     @Transactional(readOnly = true)
     public SettingsVO detail(AuthContext context) {
         requireAdmin(context, false);
-        var value = runtime.current(); var smtp = value.smtp(); var model = value.model();
-        return new SettingsVO(SettingsEntity.ID, value.version(), value.teamName(),
-            new SettingsVO.SmtpVO(smtp.host(), smtp.port(), smtp.username(), smtp.from(), smtp.security(), configured(smtp.password())),
-            new SettingsVO.ModelVO(model.baseUrl(), model.model(), configured(model.apiKey())), value.aiEnabled(),
-            status("TEST", value.version()), status("CALL", value.version()));
+        var value = runtime.current();
+        var smtp = value.smtp();
+        var model = value.model();
+        return new SettingsVO(
+                SettingsEntity.ID, value.version(), value.teamName(),
+                new SettingsVO.SmtpVO(smtp.host(), smtp.port(), smtp.username(), smtp.from(), smtp.security(), configured(smtp.password())),
+                new SettingsVO.ModelVO(model.baseUrl(), model.model(), configured(model.apiKey())), value.aiEnabled(),
+                status("TEST", value.version()), status("CALL", value.version())
+        );
     }
     private SettingsVO.StatusVO status(String kind, long version) {
         var status = statuses.find(kind);

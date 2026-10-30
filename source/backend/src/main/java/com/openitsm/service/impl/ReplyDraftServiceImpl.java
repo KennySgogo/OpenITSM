@@ -67,7 +67,12 @@ public class ReplyDraftServiceImpl implements ReplyDraftService {
         UUID attempt = UUID.randomUUID();
         statuses.begin("CALL", settings.version(), clock.instant(), attempt);
         try {
-            var result = python.replyDraft(settings.model(), clip(ticket.title, 1000), clip(ticket.description, 4000), ticket.businessType, materials);
+            var result = python.replyDraft(
+                    settings.model(),
+                    clip(ticket.title, 1000),
+                    clip(ticket.description, 4000),
+                    ticket.businessType, materials);
+
             if (result.content() == null || result.content().isBlank() || result.content().length() > 2000)
                 throw new BusinessException(503, "AI_INVALID_RESPONSE", "模型返回的草稿无效");
             runtime.recheckAiConnection(settings.version());

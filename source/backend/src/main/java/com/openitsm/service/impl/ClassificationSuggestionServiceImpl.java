@@ -54,8 +54,12 @@ public class ClassificationSuggestionServiceImpl implements ClassificationSugges
 
     private ClassificationSuggestionVO compute(AuthContext context, UUID ticketId, String title, String description, String impactScope) {
         var settings = runtime.requireAiConnection();
-        List<TicketTypeEntity> candidates = types.selectList(new QueryWrapper<TicketTypeEntity>()
-            .eq("active", true).orderByAsc("name", "id"));
+
+        //querry
+        List<TicketTypeEntity> candidates = types
+                .selectList(new QueryWrapper<TicketTypeEntity>()
+                .eq("active", true)
+                .orderByAsc("name", "id"));
         if (candidates.isEmpty()) {
             runtime.recheckAiConnection(settings.version());
             recheckAccess(context, ticketId);
@@ -65,7 +69,13 @@ public class ClassificationSuggestionServiceImpl implements ClassificationSugges
         statuses.begin("CALL", settings.version(), clock.instant(), attempt);
         try {
             var suggestion = python.suggestClassification(settings.model(), title, description, impactScope,
-                candidates.stream().map(type -> new PythonAiClient.BusinessTypeCandidate(type.id, type.name, type.description)).toList());
+                candidates.stream()
+                        .map(type -> new PythonAiClient.BusinessTypeCandidate(
+                                type.id,
+                                type.name,
+                                type.description
+                        )).toList());
+
             runtime.recheckAiConnection(settings.version());
             recheckAccess(context, ticketId);
             if (suggestion.businessTypeId() != null) {

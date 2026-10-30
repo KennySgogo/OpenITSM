@@ -50,8 +50,6 @@ public class AuthController {
     public ApiResponse<?> login(@RequestBody LoginRequest body, HttpServletRequest req, HttpServletResponse res) {
         String email = Values.email(body.email());
         if (body.password() == null || body.password().isEmpty()) throw BusinessException.field("password", "请输入密码");
-        if (body.password().codePointCount(0, body.password().length()) > 64)
-            throw new BusinessException(401, "AUTH_INVALID", "邮箱或密码错误，或账号暂不可用");
         if (body.returnTo() != null && body.returnTo().length() > 2048) throw BusinessException.field("returnTo", "返回路径过长");
         AuthContext ctx = RequestAuthentication.from(req);
         var result = auth.authenticate(email, body.password(), ctx.session() == null ? null : ctx.session().hash(), req.getRemoteAddr());

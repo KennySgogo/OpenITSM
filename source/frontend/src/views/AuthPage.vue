@@ -83,7 +83,7 @@ async function submit() {
           <ElForm ref="form" :model="model" :rules="rules" label-position="top" @submit.prevent="submit">
             <ElFormItem v-if="login || forgot" label="邮箱地址" prop="email"><ElInput v-model="model.email" placeholder="you@company.com" autocomplete="username" :maxlength="254" /></ElFormItem>
             <ElFormItem v-if="!forgot" :label="login ? '密码' : '新密码'" prop="password"><ElInput v-model="model.password" type="password" show-password :autocomplete="login ? 'current-password' : 'new-password'" placeholder="请输入密码" /></ElFormItem>
-            <div v-if="!forgot && !login" class="password-rules"><span :class="{ passed: !issues.some(x => x.includes('字符')) }">12～64 个字符</span><span :class="{ passed: !issues.some(x => x.includes('字母')) }">至少一个字母</span><span :class="{ passed: !issues.some(x => x.includes('数字')) }">至少一个数字</span></div>
+            <div v-if="!forgot && !login" class="password-rules"><span :class="{ passed: !issues.some(x => x.includes('字符')) }">至少 6 个字符</span></div>
             <ElFormItem v-if="!forgot && !login" label="确认新密码" prop="confirmPassword"><ElInput v-model="model.confirmPassword" type="password" show-password autocomplete="new-password" placeholder="再次输入新密码" /></ElFormItem>
             <div v-if="login" class="auth-options"><span>仅限受邀成员登录</span><RouterLink to="/forgot-password">忘记密码？</RouterLink></div>
             <ElButton class="auth-submit" type="primary" native-type="submit" :loading="busy" :disabled="blocked || tokenMissing">{{ waitSeconds ? `${waitSeconds} 秒后重试` : login ? '登 录' : forgot ? '申请重置链接' : activation ? '激活账号' : '重置密码' }}</ElButton>

@@ -52,7 +52,6 @@ public class AuthServiceImpl implements AuthService {
     // Rate limits commit separately; credential failure counts commit before the uniform error is raised.
     // Explicit templates avoid self-invocation losing the transaction around the existing core operations.
     public LoginSession authenticate(String email, String password, String oldHash, String source) {
-        if (password.codePointCount(0, password.length()) > 64) throw invalidLogin();
         rates.check("LOGIN_SOURCE", source, 60, Duration.ofMinutes(1), 0);
         LoginSession result = transactions.execute(status -> login(email, password, oldHash));
         if (result == null) throw invalidLogin();
@@ -106,6 +105,7 @@ public class AuthServiceImpl implements AuthService {
             return null;
         }
         if (user.lockedUntil != null) { user.lockedUntil = null; user.failedCount = 0; }
+        //校验密码
         if (!encoder.matches(password, user.passwordHash)) {
             user.failedCount++;
             if (user.failedCount >= 5) user.lockedUntil = now.plusSeconds(15 * 60);

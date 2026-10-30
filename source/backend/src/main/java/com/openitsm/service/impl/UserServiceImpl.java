@@ -83,6 +83,7 @@ public class UserServiceImpl implements UserService {
         user.id = UUID.randomUUID(); user.name = name; user.emailNormalized = email; user.role = role; user.status = "INVITED";
         user.updatedAt = clock.instant();
         users.insert(user);
+        //
         invitation(user);
         audit.append(actor.id, "MEMBER_INVITED", user.id, Map.of("role", role, "status", "INVITED"), null, requestId);
         sessions.touch(ctx.session().hash());

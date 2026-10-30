@@ -4,10 +4,10 @@ import { passwordIssues, canAccess, isLocked } from '../src/utils/Policy.ts';
 
 test('password matches Java Unicode letters, decimal digits and code point length', () => {
   assert.deepEqual(passwordIssues('中文密码测试你好世界甲乙１２', '中文密码测试你好世界甲乙１２'), []);
-  assert.ok(passwordIssues('abcdefghijk1', 'other').some(x => x.includes('一致')));
-  assert.ok(passwordIssues('abcdefghijk', 'abcdefghijk').length > 0);
-  assert.ok(passwordIssues('a1' + '😀'.repeat(63), 'a1' + '😀'.repeat(63)).length > 0);
-  assert.deepEqual(passwordIssues('a1' + '😀'.repeat(10), 'a1' + '😀'.repeat(10)), []);
+  assert.ok(passwordIssues('123456', 'other').some(x => x.includes('一致')));
+  assert.ok(passwordIssues('abcde', 'abcde').length > 0);
+  assert.deepEqual(passwordIssues('admin@admin.com', 'admin@admin.com'), []);
+  assert.deepEqual(passwordIssues('密码😀!!!', '密码😀!!!'), []);
 });
 test('route permissions deny employee assigned views and all non-admin member access', () => {
   assert.equal(canAccess('EMPLOYEE', '/tickets', 'ASSIGNED'), false);

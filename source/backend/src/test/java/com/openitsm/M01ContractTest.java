@@ -15,7 +15,8 @@ class M01ContractTest {
         assertThatThrownBy(() -> Values.text(name + "😀", "name", 1, 80)).isInstanceOf(BusinessException.class);
         String password = "  Password1234  ";
         assertThat(Values.password(password, password)).isEqualTo(password);
-        assertThatThrownBy(() -> Values.password("A1" + "x".repeat(63), "A1" + "x".repeat(63))).isInstanceOf(BusinessException.class);
+        assertThat(Values.password("admin@admin.com", "admin@admin.com")).isEqualTo("admin@admin.com");
+        assertThatThrownBy(() -> Values.password("12345", "12345")).isInstanceOf(BusinessException.class);
     }
 
     @Test

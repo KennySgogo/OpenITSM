@@ -54,6 +54,7 @@ public class AccountMailDispatchServiceImpl implements AccountMailDispatchServic
         else config.runtimeSender(runtimeSettings.current().smtp());
         int processed = 0;
         while (processed < BATCH_SIZE) {
+            // 从数据库领取一条任务
             NotificationTaskEntity task = claims.execute(status -> {
                 Instant now = clock.instant();
                 tasks.expireExhausted(now, MAX_ATTEMPTS);

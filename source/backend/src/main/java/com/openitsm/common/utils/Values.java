@@ -32,9 +32,7 @@ public final class Values {
     public static String password(String password, String confirm) {
         if (password == null || password.isEmpty()) throw BusinessException.field("password", "请输入密码");
         int count = password.codePointCount(0, password.length());
-        if (count < 12 || count > 64 || password.codePoints().noneMatch(Character::isLetter)
-            || password.codePoints().noneMatch(Character::isDigit))
-            throw BusinessException.field("password", "密码须为 12～64 位，且至少包含字母和数字");
+        if (count < 6) throw BusinessException.field("password", "密码至少需要 6 个字符");
         if (!password.equals(confirm)) throw BusinessException.field("confirmPassword", "两次密码不一致");
         return password;
     }

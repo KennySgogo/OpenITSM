@@ -41,7 +41,15 @@ public class AssigneeRecommendationServiceImpl implements AssigneeRecommendation
         actor(context, true);
         var ticket = tickets.selectById(ticketId);
         if (ticket == null) throw new BusinessException(404, "RESOURCE_NOT_FOUND", "工单不存在");
-        return compute(context, new AssigneeRecommendationRequest(ticket.title, ticket.description, ticket.businessTypeId, ticket.impactScope), ticketId);
+        return compute(
+                context,
+                new AssigneeRecommendationRequest(
+                        ticket.title,
+                        ticket.description,
+                        ticket.businessTypeId,
+                        ticket.impactScope
+                ),
+                ticketId);
     }
 
     @Override
